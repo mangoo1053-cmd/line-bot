@@ -6,6 +6,8 @@ import base64
 import json
 import os
 import re
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 app = Flask(__name__)
 
@@ -13,6 +15,14 @@ CHANNEL_ACCESS_TOKEN = os.environ.get("CHANNEL_ACCESS_TOKEN")
 CHANNEL_SECRET = os.environ.get("CHANNEL_SECRET")
 
 DATA_FILE = "chat_data.json"
+
+
+# -------------------------
+# 한국 날짜
+# -------------------------
+
+def get_today():
+    return datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d")
 
 
 # -------------------------
@@ -33,6 +43,32 @@ def load_data():
 def save_data(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+# -------------------------
+# 날짜가 바뀌면 자동 초기화
+# -------------------------
+
+def check_new_day(group_id):
+    data = load_data()
+    today = get_today()
+
+    if group_id not in data:
+        data[group_id] = {
+            "date": today,
+            "users": {}
+        }
+        save_data(data)
+        return data
+
+    if data[group_id].get("date") != today:
+        data[group_id] = {
+            "date": today,
+            "users": {}
+        }
+        save_data(data)
+
+    return data
 
 
 # -------------------------
@@ -123,12 +159,7 @@ def is_laugh_only(text):
 
 def add_message(group_id, user_id):
 
-    data = load_data()
-
-    if group_id not in data:
-        data[group_id] = {
-            "users": {}
-        }
+    data = check_new_day(group_id)
 
     if user_id not in data[group_id]["users"]:
 
@@ -153,15 +184,12 @@ def add_message(group_id, user_id):
 
 def get_ranking(group_id):
 
-    data = load_data()
-
-    if group_id not in data:
-        return "아직 집계된 채팅이 없어."
+    data = check_new_day(group_id)
 
     users = data[group_id]["users"]
 
     if not users:
-        return "아직 집계된 채팅이 없어."
+        return "오늘 아직 집계된 채팅이 없어."
 
     ranking = sorted(
         users.values(),
@@ -169,7 +197,7 @@ def get_ranking(group_id):
         reverse=True
     )
 
-    result = "🏆 단라 소통량 순위\n\n"
+    result = "🏆 오늘의 단라 소통량 순위\n\n"
 
     for i, user in enumerate(ranking, start=1):
 
@@ -277,7 +305,7 @@ def webhook():
 
                 continue
 
-            # 초기화
+            # 수동 초기화
             if text in [
                 "단라 소통량 초기화",
                 "단라소통량 초기화"
@@ -286,6 +314,7 @@ def webhook():
                 all_data = load_data()
 
                 all_data[group_id] = {
+                    "date": get_today(),
                     "users": {}
                 }
 
@@ -293,7 +322,7 @@ def webhook():
 
                 reply_message(
                     event["replyToken"],
-                    "✅ 소통량 집계를 초기화했어."
+                    "✅ 오늘 소통량 집계를 초기화했어."
                 )
 
                 continue
