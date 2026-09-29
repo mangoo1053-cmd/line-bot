@@ -169,13 +169,13 @@ def get_ranking(group_id)
         reverse=True
     )
 
-    result = 🏆 단라 소통량 순위nn
+    result = "🏆 단라 소통량 순위\n\n"
 
     for i, user in enumerate(ranking, start=1)
 
         result += (
-            f{i}위 {user['name']} — 
-            f{user['count'],}개n
+            f"{i}위 {user['name']} — 
+            {user['count']:,}개\n"
         )
 
     return result
