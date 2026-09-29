@@ -19,7 +19,7 @@ DATA_FILE = chat_data.json
 # 데이터
 # -------------------------
 
-def load_data()
+def load_data():
     if not os.path.exists(DATA_FILE)
         return {}
 
