@@ -22,7 +22,9 @@ DATA_FILE = "chat_data.json"
 # -------------------------
 
 def get_today():
-    return datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d")
+    return datetime.now(
+        ZoneInfo("Asia/Seoul")
+    ).strftime("%Y-%m-%d")
 
 
 # -------------------------
@@ -34,15 +36,29 @@ def load_data():
         return {}
 
     try:
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
+        with open(
+            DATA_FILE,
+            "r",
+            encoding="utf-8"
+        ) as f:
             return json.load(f)
+
     except:
         return {}
 
 
 def save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    with open(
+        DATA_FILE,
+        "w",
+        encoding="utf-8"
+    ) as f:
+        json.dump(
+            data,
+            f,
+            ensure_ascii=False,
+            indent=2
+        )
 
 
 # -------------------------
@@ -50,25 +66,71 @@ def save_data(data):
 # -------------------------
 
 def check_new_day(group_id):
+
     data = load_data()
     today = get_today()
 
     if group_id not in data:
+
         data[group_id] = {
             "date": today,
             "users": {}
         }
+
         save_data(data)
+
         return data
 
     if data[group_id].get("date") != today:
+
         data[group_id] = {
             "date": today,
             "users": {}
         }
+
         save_data(data)
 
     return data
+
+
+# -------------------------
+# 닉네임 만들기
+# -------------------------
+
+def make_nickname(text):
+
+    parts = text.strip().split()
+
+    if len(parts) != 3:
+        return None
+
+    name, age, role = parts
+
+    # 나이는 두 자리만 허용
+    if not age.isdigit() or len(age) != 2:
+        return None
+
+    # 섭 / 돔
+    if role == "돔":
+        letter = "𝒅"
+
+    elif role == "섭":
+        letter = "𝒔"
+
+    else:
+        return None
+
+    # 숫자 위첨자 변환
+    superscript = str.maketrans(
+        "0123456789",
+        "⁰¹²³⁴⁵⁶⁷⁸⁹"
+    )
+
+    age_sup = age.translate(
+        superscript
+    )
+
+    return f"{name}_{letter}{age_sup}"
 
 
 # -------------------------
@@ -83,6 +145,7 @@ def line_api(method, url, data=None):
     }
 
     if method == "POST":
+
         return requests.post(
             url,
             headers=headers,
@@ -97,7 +160,10 @@ def line_api(method, url, data=None):
 
 def reply_message(reply_token, text):
 
-    url = "https://api.line.me/v2/bot/message/reply"
+    url = (
+        "https://api.line.me/"
+        "v2/bot/message/reply"
+    )
 
     data = {
         "replyToken": reply_token,
@@ -109,9 +175,17 @@ def reply_message(reply_token, text):
         ]
     }
 
-    response = line_api("POST", url, data)
+    response = line_api(
+        "POST",
+        url,
+        data
+    )
 
-    print("LINE reply:", response.status_code, response.text)
+    print(
+        "LINE reply:",
+        response.status_code,
+        response.text
+    )
 
 
 # -------------------------
@@ -125,9 +199,13 @@ def get_user_name(group_id, user_id):
         f"{group_id}/member/{user_id}"
     )
 
-    response = line_api("GET", url)
+    response = line_api(
+        "GET",
+        url
+    )
 
     if response.status_code == 200:
+
         return response.json().get(
             "displayName",
             "알 수 없음"
@@ -147,7 +225,10 @@ def is_laugh_only(text):
     if not text:
         return True
 
-    if re.fullmatch(r"^[ㅋㅎㅠㅜ]+$", text):
+    if re.fullmatch(
+        r"^[ㅋㅎㅠㅜ]+$",
+        text
+    ):
         return True
 
     return False
@@ -159,7 +240,9 @@ def is_laugh_only(text):
 
 def add_message(group_id, user_id):
 
-    data = check_new_day(group_id)
+    data = check_new_day(
+        group_id
+    )
 
     if user_id not in data[group_id]["users"]:
 
@@ -179,16 +262,19 @@ def add_message(group_id, user_id):
 
 
 # -------------------------
-# 순위
+# 오늘의 순위
 # -------------------------
 
 def get_ranking(group_id):
 
-    data = check_new_day(group_id)
+    data = check_new_day(
+        group_id
+    )
 
     users = data[group_id]["users"]
 
     if not users:
+
         return "오늘 아직 집계된 채팅이 없어."
 
     ranking = sorted(
@@ -197,9 +283,14 @@ def get_ranking(group_id):
         reverse=True
     )
 
-    result = "🏆 오늘의 단라 소통량 순위\n\n"
+    result = (
+        "🏆 오늘의 단라 소통량 순위\n\n"
+    )
 
-    for i, user in enumerate(ranking, start=1):
+    for i, user in enumerate(
+        ranking,
+        start=1
+    ):
 
         result += (
             f"{i}위 {user['name']} — "
@@ -213,7 +304,10 @@ def get_ranking(group_id):
 # 웹훅
 # -------------------------
 
-@app.route("/webhook", methods=["POST"])
+@app.route(
+    "/webhook",
+    methods=["POST"]
+)
 def webhook():
 
     signature = request.headers.get(
@@ -231,21 +325,30 @@ def webhook():
         hashlib.sha256
     ).digest()
 
-    expected_signature = base64.b64encode(
-        hash_value
-    ).decode("utf-8")
+    expected_signature = (
+        base64.b64encode(
+            hash_value
+        ).decode("utf-8")
+    )
 
     if not hmac.compare_digest(
         expected_signature,
         signature or ""
     ):
+
         abort(400)
 
     data = request.json
 
-    for event in data.get("events", []):
+    for event in data.get(
+        "events",
+        []
+    ):
 
-        if event.get("type") != "message":
+        if event.get(
+            "type"
+        ) != "message":
+
             continue
 
         message = event.get(
@@ -263,7 +366,10 @@ def webhook():
         )
 
         # 그룹방만 처리
-        if source.get("type") != "group":
+        if source.get(
+            "type"
+        ) != "group":
+
             continue
 
         group_id = source.get(
@@ -277,6 +383,7 @@ def webhook():
         if not user_id:
             continue
 
+
         # ---------------------
         # 텍스트
         # ---------------------
@@ -288,7 +395,29 @@ def webhook():
                 ""
             ).strip()
 
+
+            # ---------------------
+            # 닉네임 변환
+            # ---------------------
+
+            nickname = make_nickname(
+                text
+            )
+
+            if nickname:
+
+                reply_message(
+                    event["replyToken"],
+                    nickname
+                )
+
+                continue
+
+
+            # ---------------------
             # 소통량
+            # ---------------------
+
             if text in [
                 "단라 소통량",
                 "단라소통량"
@@ -305,7 +434,11 @@ def webhook():
 
                 continue
 
+
+            # ---------------------
             # 수동 초기화
+            # ---------------------
+
             if text in [
                 "단라 소통량 초기화",
                 "단라소통량 초기화"
@@ -318,7 +451,9 @@ def webhook():
                     "users": {}
                 }
 
-                save_data(all_data)
+                save_data(
+                    all_data
+                )
 
                 reply_message(
                     event["replyToken"],
@@ -327,31 +462,50 @@ def webhook():
 
                 continue
 
+
+            # ---------------------
             # ㅋㅋㅋ ㅎㅎㅎ만 있는 경우
-            if is_laugh_only(text):
+            # ---------------------
+
+            if is_laugh_only(
+                text
+            ):
+
                 continue
 
+
+            # ---------------------
             # 일반 텍스트 +1
+            # ---------------------
+
             add_message(
                 group_id,
                 user_id
             )
 
+
         # 사진, 스티커, 영상 등
         else:
+
             continue
+
 
     return "OK"
 
 
 # -------------------------
-# 서버 실행
+# 홈페이지
 # -------------------------
 
 @app.route("/")
 def home():
+
     return "LINE Bot is running!"
 
+
+# -------------------------
+# 서버 실행
+# -------------------------
 
 if __name__ == "__main__":
 
