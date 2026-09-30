@@ -101,26 +101,43 @@ def make_nickname(text):
 
     parts = text.strip().split()
 
-    if len(parts) != 3:
+    # 이름 / 나이 / 타입 / 성별
+    if len(parts) != 4:
         return None
 
-    name, age, role = parts
+    name, age, role, gender = parts
 
-    # 나이는 두 자리만 허용
+    # 나이는 두 자리
     if not age.isdigit() or len(age) != 2:
         return None
 
-    # 섭 / 돔
+    # 타입
     if role == "돔":
-        letter = "𝒅"
+        role_text = "𝒅"
 
     elif role == "섭":
-        letter = "𝒔"
+        role_text = "𝒔"
+
+    elif role == "스위치":
+        role_text = "𝒔/𝒅"
+
+    elif role == "바닐라":
+        role_text = "𝒗"
 
     else:
         return None
 
-    # 숫자 위첨자 변환
+    # 성별
+    if gender == "여자":
+        gender_icon = "📡"
+
+    elif gender == "남자":
+        gender_icon = "🔭"
+
+    else:
+        return None
+
+    # 숫자 위첨자
     superscript = str.maketrans(
         "0123456789",
         "⁰¹²³⁴⁵⁶⁷⁸⁹"
@@ -130,7 +147,7 @@ def make_nickname(text):
         superscript
     )
 
-    return f"{name}_{letter}{age_sup}"
+    return f"{name}{role_text}{age_sup}{gender_icon}"
 
 
 # -------------------------
