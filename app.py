@@ -29,14 +29,14 @@ DATA_FILE = "chat_data.json"
 # AI 설정
 # =========================================================
 
-# AI가 일반 대화에 개입할 확률
-# 0.005 = 0.5%
-AI_TRIGGER_CHANCE = 0.005
+# AI가 개입 여부를 판단할 기회
+# 0.03 = 3%
+AI_TRIGGER_CHANCE = 0.03
 
-# AI가 한 번 개입한 후 3시간 동안 다시 개입하지 않음
+# AI가 한 번 말한 뒤 3시간 동안 다시 말하지 않음
 AI_COOLDOWN_SECONDS = 3 * 60 * 60
 
-# AI에게 보여줄 최근 대화 개수
+# AI에게 보여줄 최근 대화
 RECENT_MESSAGE_LIMIT = 12
 
 
@@ -62,7 +62,7 @@ def get_current_hour():
 
 
 # =========================================================
-# 데이터 기본 구조
+# 기본 그룹 데이터
 # =========================================================
 
 def create_group_data():
@@ -70,25 +70,18 @@ def create_group_data():
     return {
         "date": get_today(),
 
-        # 오늘 소통량
         "users": {},
 
-        # 지금까지 전체 메시지
         "total_messages": 0,
 
-        # 지금까지 참여한 사람
         "participants": {},
 
-        # 날짜별 전체 메시지
         "daily_counts": {},
 
-        # 시간별 사용자 메시지
         "hour_counts": {},
 
-        # 최근 대화
         "recent_messages": [],
 
-        # 마지막 AI 개입 시간
         "last_ai_reply": 0
     }
 
@@ -100,6 +93,7 @@ def create_group_data():
 def load_data():
 
     if not os.path.exists(DATA_FILE):
+
         return {}
 
     try:
@@ -112,7 +106,12 @@ def load_data():
 
             return json.load(f)
 
-    except Exception:
+    except Exception as e:
+
+        print(
+            "데이터 불러오기 오류:",
+            e
+        )
 
         return {}
 
@@ -158,37 +157,54 @@ def check_new_day(group_id):
     group = data[group_id]
 
 
-    # 기존 데이터에 새 항목이 없을 경우 보완
+    # 기존 데이터에 없는 항목 보완
     if "total_messages" not in group:
+
         group["total_messages"] = 0
 
+
     if "participants" not in group:
+
         group["participants"] = {}
 
+
     if "daily_counts" not in group:
+
         group["daily_counts"] = {}
 
+
     if "hour_counts" not in group:
+
         group["hour_counts"] = {}
 
+
     if "recent_messages" not in group:
+
         group["recent_messages"] = []
 
+
     if "last_ai_reply" not in group:
+
         group["last_ai_reply"] = 0
 
+
     if "users" not in group:
+
         group["users"] = {}
 
 
     today = get_today()
 
 
-    # 날짜가 바뀌었으면 오늘 소통량만 초기화
+    # 날짜가 바뀌었을 경우
+    # 오늘 소통량만 초기화
+    # 누적 통계는 유지
     if group.get("date") != today:
 
         group["date"] = today
+
         group["users"] = {}
+
         group["hour_counts"] = {}
 
 
@@ -208,14 +224,16 @@ def make_nickname(text):
 
     # 이름 / 나이 / 타입 / 성별
     if len(parts) != 4:
+
         return None
 
 
     name, age, role, gender = parts
 
 
-    # 나이는 정확히 두 자리
+    # 나이 두 자리
     if not age.isdigit() or len(age) != 2:
+
         return None
 
 
@@ -255,7 +273,7 @@ def make_nickname(text):
         return None
 
 
-    # 숫자를 위첨자로 변환
+    # 숫자 위첨자
     superscript = str.maketrans(
         "0123456789",
         "⁰¹²³⁴⁵⁶⁷⁸⁹"
@@ -268,18 +286,31 @@ def make_nickname(text):
 
 
     # 언더바 없음
-    return f"{name}{role_text}{age_sup}{gender_icon}"
+    return (
+        f"{name}"
+        f"{role_text}"
+        f"{age_sup}"
+        f"{gender_icon}"
+    )
 
 
 # =========================================================
 # LINE API
 # =========================================================
 
-def line_api(method, url, data=None):
+def line_api(
+    method,
+    url,
+    data=None
+):
 
     headers = {
-        "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}",
-        "Content-Type": "application/json"
+
+        "Authorization":
+            f"Bearer {CHANNEL_ACCESS_TOKEN}",
+
+        "Content-Type":
+            "application/json"
     }
 
 
@@ -301,10 +332,13 @@ def line_api(method, url, data=None):
 
 
 # =========================================================
-# LINE 메시지 답장
+# LINE 답장
 # =========================================================
 
-def reply_message(reply_token, text):
+def reply_message(
+    reply_token,
+    text
+):
 
     url = (
         "https://api.line.me/"
@@ -314,13 +348,16 @@ def reply_message(reply_token, text):
 
     data = {
 
-        "replyToken": reply_token,
+        "replyToken":
+            reply_token,
 
         "messages": [
+
             {
                 "type": "text",
                 "text": text
             }
+
         ]
     }
 
@@ -350,10 +387,13 @@ def reply_message(reply_token, text):
 
 
 # =========================================================
-# 사용자 이름 가져오기
+# 사용자 이름
 # =========================================================
 
-def get_user_name(group_id, user_id):
+def get_user_name(
+    group_id,
+    user_id
+):
 
     url = (
         f"https://api.line.me/v2/bot/group/"
@@ -376,10 +416,11 @@ def get_user_name(group_id, user_id):
                 "알 수 없음"
             )
 
+
     except Exception as e:
 
         print(
-            "사용자 이름 가져오기 오류:",
+            "사용자 이름 오류:",
             e
         )
 
@@ -388,7 +429,7 @@ def get_user_name(group_id, user_id):
 
 
 # =========================================================
-# ㅋㅋㅋ / ㅎㅎㅎ / ㅠㅠ / ㅜㅜ만 있는 메시지 제외
+# ㅋㅋ / ㅎㅎ / ㅠㅜ만 있는 메시지 제외
 # =========================================================
 
 def is_laugh_only(text):
@@ -413,7 +454,7 @@ def is_laugh_only(text):
 
 
 # =========================================================
-# 메시지 기록
+# 일반 메시지 기록
 # =========================================================
 
 def add_message(
@@ -439,11 +480,14 @@ def add_message(
 
         group["users"][user_id] = {
 
-            "name": user_name,
+            "name":
+                user_name,
 
-            "count": 0,
+            "count":
+                0,
 
-            "hour_counts": {}
+            "hour_counts":
+                {}
         }
 
 
@@ -461,7 +505,9 @@ def add_message(
     # 참여 인원
     # -----------------------------------------------------
 
-    group["participants"][user_id] = user_name
+    group["participants"][user_id] = (
+        user_name
+    )
 
 
     # -----------------------------------------------------
@@ -480,7 +526,7 @@ def add_message(
 
 
     # -----------------------------------------------------
-    # 시간별 메시지
+    # 시간별 전체 메시지
     # -----------------------------------------------------
 
     hour = get_current_hour()
@@ -496,13 +542,18 @@ def add_message(
     group["hour_counts"][hour_key] += 1
 
 
-    # 사용자별 시간 기록
+    # -----------------------------------------------------
+    # 사용자별 시간
+    # -----------------------------------------------------
+
     if "hour_counts" not in group["users"][user_id]:
 
         group["users"][user_id]["hour_counts"] = {}
 
 
-    user_hour_counts = group["users"][user_id]["hour_counts"]
+    user_hour_counts = (
+        group["users"][user_id]["hour_counts"]
+    )
 
 
     if hour_key not in user_hour_counts:
@@ -519,17 +570,22 @@ def add_message(
 
     group["recent_messages"].append({
 
-        "name": user_name,
+        "name":
+            user_name,
 
-        "text": text,
+        "text":
+            text,
 
-        "time": get_now().strftime("%H:%M:%S")
+        "time":
+            get_now().strftime("%H:%M:%S")
     })
 
 
-    # 최근 12개만 유지
+    # 최근 12개만 보관
     group["recent_messages"] = (
-        group["recent_messages"][-RECENT_MESSAGE_LIMIT:]
+        group["recent_messages"][
+            -RECENT_MESSAGE_LIMIT:
+        ]
     )
 
 
@@ -580,12 +636,18 @@ def get_ranking(group_id):
 
     if not users:
 
-        return "오늘 아직 집계된 채팅이 없어."
+        return (
+            "오늘 아직 집계된 "
+            "채팅이 없어."
+        )
 
 
     ranking = sorted(
         users.items(),
-        key=lambda x: x[1].get("count", 0),
+        key=lambda x: x[1].get(
+            "count",
+            0
+        ),
         reverse=True
     )
 
@@ -595,13 +657,18 @@ def get_ranking(group_id):
     )
 
 
-    for i, (user_id, user) in enumerate(
+    for i, (
+        user_id,
+        user
+    ) in enumerate(
         ranking,
         start=1
     ):
 
         result += (
-            f"{i}위 {user.get('name', '알 수 없음')} — "
+            f"{i}위 "
+            f"{user.get('name', '알 수 없음')} "
+            f"— "
             f"{user.get('count', 0):,}개\n"
         )
 
@@ -651,8 +718,15 @@ def get_room_stats(group_id):
             key=lambda x: x[1]
         )
 
-        date_text = most_active_day[0]
-        message_count = most_active_day[1]
+
+        date_text = (
+            most_active_day[0]
+        )
+
+
+        message_count = (
+            most_active_day[1]
+        )
 
 
         try:
@@ -662,11 +736,13 @@ def get_room_stats(group_id):
                 "%Y-%m-%d"
             )
 
+
             active_day_text = (
                 f"{date_obj.month}월 "
                 f"{date_obj.day}일 "
                 f"({message_count:,}개)"
             )
+
 
         except Exception:
 
@@ -675,9 +751,12 @@ def get_room_stats(group_id):
                 f"({message_count:,}개)"
             )
 
+
     else:
 
-        active_day_text = "아직 기록 없음"
+        active_day_text = (
+            "아직 기록 없음"
+        )
 
 
     return (
@@ -722,7 +801,7 @@ def get_my_stats(
     )
 
 
-    # 전체 누적 소통량
+    # 현재 코드의 소통량은 오늘 기준
     total_count = 0
 
 
@@ -740,7 +819,10 @@ def get_my_stats(
 
     sorted_users = sorted(
         users.items(),
-        key=lambda x: x[1].get("count", 0),
+        key=lambda x: x[1].get(
+            "count",
+            0
+        ),
         reverse=True
     )
 
@@ -748,7 +830,10 @@ def get_my_stats(
     my_rank = None
 
 
-    for index, (uid, user) in enumerate(
+    for index, (
+        uid,
+        user
+    ) in enumerate(
         sorted_users,
         start=1
     ):
@@ -762,11 +847,15 @@ def get_my_stats(
 
     if my_rank is None:
 
-        my_rank_text = "아직 집계 없음"
+        my_rank_text = (
+            "아직 집계 없음"
+        )
 
     else:
 
-        my_rank_text = f"{my_rank}위"
+        my_rank_text = (
+            f"{my_rank}위"
+        )
 
 
     # -----------------------------------------------------
@@ -778,9 +867,11 @@ def get_my_stats(
 
     if user_id in users:
 
-        my_hour_counts = users[user_id].get(
-            "hour_counts",
-            {}
+        my_hour_counts = (
+            users[user_id].get(
+                "hour_counts",
+                {}
+            )
         )
 
 
@@ -797,7 +888,9 @@ def get_my_stats(
         )
 
 
-        count = most_active_hour[1]
+        count = (
+            most_active_hour[1]
+        )
 
 
         next_hour = (
@@ -811,9 +904,12 @@ def get_my_stats(
             f"({count:,}개)"
         )
 
+
     else:
 
-        active_time_text = "아직 기록 없음"
+        active_time_text = (
+            "아직 기록 없음"
+        )
 
 
     return (
@@ -831,7 +927,7 @@ def get_my_stats(
 
 
 # =========================================================
-# AI에게 최근 대화 판단시키기
+# AI에게 최근 대화 판단
 # =========================================================
 
 def ask_ai_to_reply(group_id):
@@ -839,7 +935,7 @@ def ask_ai_to_reply(group_id):
     if not OPENAI_API_KEY:
 
         print(
-            "OPENAI_API_KEY가 없음"
+            "OPENAI_API_KEY가 없습니다."
         )
 
         return None
@@ -864,7 +960,10 @@ def ask_ai_to_reply(group_id):
         return None
 
 
-    # 최근 대화 만들기
+    # -----------------------------------------------------
+    # 최근 대화 정리
+    # -----------------------------------------------------
+
     conversation_lines = []
 
 
@@ -874,6 +973,7 @@ def ask_ai_to_reply(group_id):
             "name",
             "알 수 없음"
         )
+
 
         text = message.get(
             "text",
@@ -891,43 +991,131 @@ def ask_ai_to_reply(group_id):
     )
 
 
-    # -----------------------------------------------------
+    # =====================================================
     # AI 프롬프트
-    # -----------------------------------------------------
+    # =====================================================
 
     prompt = f"""
-너는 한국인 친구들이 있는 LINE 단체채팅방에 자연스럽게 섞여 있는
-아주 조용한 채팅봇이야.
+너는 한국 친구들이 있는 LINE 단체채팅방에
+조용히 들어와 있는 채팅봇이다.
 
-아래 최근 대화를 전체적인 맥락으로 보고 판단해.
+너의 가장 중요한 특징은
+"평소에는 거의 존재감이 없지만,
+가끔 정말 자연스러운 순간에 한마디 끼어드는 것"이다.
 
-중요:
-- 특정 키워드만 보고 판단하지 마.
-- 대화의 흐름과 앞뒤 맥락을 전체적으로 봐.
-- 평범하게 대화가 이어지고 있다면 억지로 끼어들지 마.
-- 정말 자연스럽게 한마디 정도 끼어들 만한 상황일 때만 말해.
-- 봇이라는 느낌이 강한 말투를 사용하지 마.
-- 친구가 단톡방에서 한마디 하는 것처럼 짧고 자연스럽게 말해.
-- 매번 비슷한 표현을 반복하지 마.
-- 너무 길게 말하지 마.
-- 질문을 남발하지 마.
-- 민감한 개인정보 이야기는 하지 마.
-- 성적인 내용, 정치, 종교, 심각한 갈등이나 싸움에는 개입하지 마.
-- 사람을 공격하거나 비꼬는 말은 하지 마.
-- 억지로 웃기려고 하지 마.
+아래 최근 대화 12개를 반드시 전체적으로 읽고 판단해라.
 
-판단 결과는 반드시 다음 형식 중 하나만 사용해.
+[중요한 판단 기준]
+
+1. 특정 단어나 키워드 하나만 보고 반응하지 마라.
+
+2. 앞뒤 대화의 흐름을 봐라.
+
+3. 사람들이 실제로 대화를 이어가고 있고
+   봇이 굳이 끼어들 필요가 없다면 NO를 선택해라.
+
+4. 반대로 대화 중에서
+   친구가 한마디 던지면 자연스럽게 분위기에 섞일 만한 순간이라면
+   YES를 선택할 수 있다.
+
+5. "배고프다", "졸리다", "귀찮다" 같은 평범한 말도
+   주변 대화와 자연스럽게 연결할 수 있다면
+   짧게 한마디 할 수 있다.
+
+6. 하지만 모든 평범한 말에 반응하면 안 된다.
+
+7. 억지로 웃기려고 하지 마라.
+
+8. 봇이 질문을 계속해서 대화를 주도하려고 하지 마라.
+
+9. 친구 한 명이 단톡방에서 툭 던지는 것 같은 말투를 사용해라.
+
+10. 너무 정중하거나 설명하는 말투를 사용하지 마라.
+
+11. "저도 그렇게 생각해요"
+    "흥미로운 이야기네요"
+    같은 AI 같은 말투는 사용하지 마라.
+
+12. 필요하면 ㅋㅋ, ㄹㅇ, 인정, 그러게 같은
+    자연스러운 한국 단톡방 표현을 사용할 수 있다.
+
+13. 답변은 짧게 해라.
+    보통 한 문장 정도가 가장 좋다.
+
+14. 민감한 개인정보, 성적인 내용, 정치, 종교,
+    심각한 싸움이나 갈등에는 끼어들지 마라.
+
+15. 특정 사람을 공격하거나 놀리는 말은 하지 마라.
+
+16. 대화가 너무 평범하고 봇이 필요 없으면
+    아무 말도 하지 않는 것이 가장 좋은 선택이다.
+
+[예시]
+
+대화:
+A: 나 오늘 밥 못먹음
+B: 왜
+A: 학원 늦게 끝남
+C: 나도 배고프다
+A: 배고프다
+B: 먹어
+A: 귀찮아
+
+가능한 판단:
+YES|배고픈데 먹기는 귀찮은 상태네 ㅋㅋ
+
+---
+
+대화:
+A: 오늘 발로 할 사람
+B: 나
+C: 나도
+A: 지금?
+B: 잠깐만
+C: 밥먹고
+A: 얼마나 걸리는데
+C: 10분
+
+가능한 판단:
+YES|10분이 제일 믿기 힘든 시간인데
+
+---
+
+대화:
+A: 학교 갔다옴
+B: 오늘 뭐함
+C: 학원
+D: 나도 학원
+A: 숙제함?
+B: 안함
+C: 나도
+D: 큰일났네
+
+가능한 판단:
+NO
+
+위 예시는 참고만 하고,
+실제 대화에서는 실제 맥락에 맞춰 판단해라.
+
+반드시 아래 형식 중 하나만 출력해라.
 
 개입할 필요가 없으면:
 NO
 
-자연스럽게 한마디 할 만하면:
-YES|하고 싶은 말
+자연스럽게 끼어들 만하면:
+YES|한마디
 
-최근 대화:
+절대로 다른 설명을 붙이지 마라.
+
+[최근 단체채팅 대화]
+
 {conversation}
 """
 
+
+    # =====================================================
+    # OpenAI Responses API
+    # =====================================================
 
     url = (
         "https://api.openai.com/v1/responses"
@@ -946,11 +1134,14 @@ YES|하고 싶은 말
 
     payload = {
 
-        "model": "gpt-5.6-luna",
+        "model":
+            "gpt-5.6-luna",
 
-        "input": prompt,
+        "input":
+            prompt,
 
-        "max_output_tokens": 100
+        "max_output_tokens":
+            100
     }
 
 
@@ -983,13 +1174,18 @@ YES|하고 싶은 말
         result = response.json()
 
 
+        # -------------------------------------------------
         # Responses API 결과 추출
+        # -------------------------------------------------
+
         ai_text = ""
 
 
         if "output_text" in result:
 
-            ai_text = result["output_text"]
+            ai_text = (
+                result["output_text"]
+            )
 
 
         else:
@@ -1008,18 +1204,15 @@ YES|하고 싶은 말
                         "type"
                     ) == "output_text":
 
-                        ai_text += content.get(
-                            "text",
-                            ""
+                        ai_text += (
+                            content.get(
+                                "text",
+                                ""
+                            )
                         )
 
 
         ai_text = ai_text.strip()
-
-
-        if not ai_text:
-
-            return None
 
 
         print(
@@ -1028,18 +1221,18 @@ YES|하고 싶은 말
         )
 
 
-        # -------------------------------------------------
+        # =================================================
         # NO
-        # -------------------------------------------------
+        # =================================================
 
         if ai_text.upper() == "NO":
 
             return None
 
 
-        # -------------------------------------------------
+        # =================================================
         # YES|내용
-        # -------------------------------------------------
+        # =================================================
 
         if ai_text.startswith(
             "YES|"
@@ -1055,10 +1248,10 @@ YES|하고 싶은 말
                 return None
 
 
-            # 너무 긴 답변 방지
-            if len(reply) > 150:
+            # 지나치게 긴 답변 방지
+            if len(reply) > 100:
 
-                reply = reply[:150]
+                reply = reply[:100]
 
 
             return reply
@@ -1070,7 +1263,7 @@ YES|하고 싶은 말
     except Exception as e:
 
         print(
-            "OpenAI error:",
+            "OpenAI 요청 오류:",
             e
         )
 
@@ -1086,7 +1279,7 @@ def maybe_ai_intervene(
     reply_token
 ):
 
-    # API 키가 없으면 작동하지 않음
+    # API 키 없으면 종료
     if not OPENAI_API_KEY:
 
         return
@@ -1122,7 +1315,7 @@ def maybe_ai_intervene(
 
 
     # -----------------------------------------------------
-    # 0.5% 확률
+    # 3% 확률
     # -----------------------------------------------------
 
     if random.random() > AI_TRIGGER_CHANCE:
@@ -1131,7 +1324,7 @@ def maybe_ai_intervene(
 
 
     # -----------------------------------------------------
-    # AI에게 판단
+    # AI가 실제 개입할지 판단
     # -----------------------------------------------------
 
     ai_reply = ask_ai_to_reply(
@@ -1145,7 +1338,7 @@ def maybe_ai_intervene(
 
 
     # -----------------------------------------------------
-    # AI 개입 시간 저장
+    # 마지막 AI 개입 시간 저장
     # -----------------------------------------------------
 
     data = load_data()
@@ -1156,14 +1349,16 @@ def maybe_ai_intervene(
         return
 
 
-    data[group_id]["last_ai_reply"] = time.time()
+    data[group_id]["last_ai_reply"] = (
+        time.time()
+    )
 
 
     save_data(data)
 
 
     # -----------------------------------------------------
-    # AI 메시지 보내기
+    # AI 메시지 전송
     # -----------------------------------------------------
 
     reply_message(
@@ -1231,7 +1426,7 @@ def webhook():
         []
     ):
 
-        # 메시지 이벤트만
+        # 메시지 이벤트만 처리
         if event.get(
             "type"
         ) != "message":
@@ -1283,12 +1478,12 @@ def webhook():
 
 
         # -------------------------------------------------
-        # 텍스트 메시지만 처리
+        # 텍스트만 처리
         # -------------------------------------------------
 
         if message_type != "text":
 
-            # 사진 / 스티커 / 영상 등은 집계하지 않음
+            # 사진 / 스티커 / 영상 등 제외
             continue
 
 
@@ -1448,7 +1643,7 @@ def webhook():
                 )
 
 
-            # 오늘 데이터만 초기화
+            # 오늘 집계만 초기화
             all_data[group_id]["date"] = (
                 get_today()
             )
@@ -1475,7 +1670,7 @@ def webhook():
 
 
         # =================================================
-        # 웃음 / 울음만 있는 메시지는 집계 안 함
+        # ㅋㅋ / ㅎㅎ / ㅠㅜ만 있는 메시지
         # =================================================
 
         if is_laugh_only(
@@ -1486,7 +1681,7 @@ def webhook():
 
 
         # =================================================
-        # 일반 메시지 집계
+        # 일반 메시지 +1
         # =================================================
 
         add_message(
@@ -1500,8 +1695,8 @@ def webhook():
         # =================================================
         # AI 자연스러운 개입
         #
-        # 확률 0.5%
-        # 쿨다운 3시간
+        # 3% 확률
+        # 3시간 쿨다운
         # =================================================
 
         maybe_ai_intervene(
