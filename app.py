@@ -232,7 +232,7 @@ def get_user_name(group_id, user_id):
 
 
 # -------------------------
-# ㅋㅋㅋ ㅎㅎㅎ만 있는 메시지 제외
+# ㅋㅋㅋ ㅎㅎㅎ ㅠㅠ ㅜㅜ만 있는 메시지 제외
 # -------------------------
 
 def is_laugh_only(text):
@@ -279,7 +279,29 @@ def add_message(group_id, user_id):
 
 
 # -------------------------
-# 오늘의 순위
+# 내 오늘 소통량
+# -------------------------
+
+def get_my_count(group_id, user_id):
+
+    data = check_new_day(
+        group_id
+    )
+
+    users = data[group_id]["users"]
+
+    if user_id not in users:
+
+        return 0
+
+    return users[user_id].get(
+        "count",
+        0
+    )
+
+
+# -------------------------
+# 오늘의 전체 순위
 # -------------------------
 
 def get_ranking(group_id):
@@ -432,7 +454,35 @@ def webhook():
 
 
             # ---------------------
-            # 소통량
+            # 내 마딧수
+            # ---------------------
+
+            if text in [
+                "내 마딧수",
+                "내마딧수"
+            ]:
+
+                my_count = get_my_count(
+                    group_id,
+                    user_id
+                )
+
+                user_name = get_user_name(
+                    group_id,
+                    user_id
+                )
+
+                reply_message(
+                    event["replyToken"],
+                    f"📊 {user_name}님의 오늘 소통량은 "
+                    f"{my_count:,}개야."
+                )
+
+                continue
+
+
+            # ---------------------
+            # 전체 소통량 순위
             # ---------------------
 
             if text in [
@@ -481,7 +531,7 @@ def webhook():
 
 
             # ---------------------
-            # ㅋㅋㅋ ㅎㅎㅎ만 있는 경우
+            # ㅋㅋㅋ ㅎㅎㅎ ㅠㅠ ㅜㅜ만 있는 경우
             # ---------------------
 
             if is_laugh_only(
