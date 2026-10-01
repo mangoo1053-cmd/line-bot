@@ -56,6 +56,9 @@ if not SUPABASE_URL:
 if not SUPABASE_KEY:
     print("WARNING: SUPABASE_KEY가 없습니다.")
 
+if not OPENAI_API_KEY:
+    print("WARNING: OPENAI_API_KEY가 없습니다.")
+
 
 # =========================================================
 # 시간
@@ -82,6 +85,10 @@ def supabase_headers():
 
 
 def supabase_request(method, table, params=None, data=None):
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        print("Supabase 환경변수가 없습니다.")
+        return None
+
     url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/{table}"
 
     try:
@@ -130,10 +137,15 @@ def line_api(endpoint, payload):
             timeout=10
         )
 
+        if not response.ok:
+            print("LINE API 오류:")
+            print(response.status_code)
+            print(response.text)
+
         return response
 
     except Exception as e:
-        print("LINE API 오류:", e)
+        print("LINE API 연결 오류:", e)
         return None
 
 
@@ -189,6 +201,12 @@ def get_profile_name(group_id, user_id):
         if response.ok:
             data = response.json()
             return data.get("displayName", "사용자")
+
+        print(
+            "프로필 이름 가져오기 실패:",
+            response.status_code,
+            response.text
+        )
 
     except Exception as e:
         print("프로필 이름 오류:", e)
@@ -385,9 +403,7 @@ def get_room_stats(group_id):
                     row["user_id"]
                 )
 
-    participant_count = len(
-        participants
-    )
+    participant_count = len(participants)
 
     # 가장 활발했던 날
     day_params = {
@@ -963,7 +979,7 @@ def maybe_ai_intervene(group_id):
 
 
 # =========================================================
-# 웹훅
+# 홈
 # =========================================================
 
 @app.route(
@@ -977,11 +993,20 @@ def home():
     )
 
 
+# =========================================================
+# 웹훅
+# =========================================================
+# 중요:
+# LINE Developers의 Webhook URL이
+# https://line-bot-crry.onrender.com/webhook
+# 이므로 반드시 /webhook이어야 함.
+# =========================================================
+
 @app.route(
-    "/callback",
+    "/webhook",
     methods=["POST"]
 )
-def callback():
+def webhook():
 
     # -----------------------------------------
     # LINE 서명 확인
@@ -992,6 +1017,10 @@ def callback():
     )
 
     body = request.get_data()
+
+    if not CHANNEL_SECRET:
+        print("CHANNEL_SECRET이 없습니다.")
+        abort(500)
 
     hash_value = hmac.new(
         CHANNEL_SECRET.encode("utf-8"),
@@ -1009,9 +1038,17 @@ def callback():
         expected_signature,
         signature or ""
     ):
+        print("LINE 서명 검증 실패")
         abort(400)
 
-    events = request.json.get(
+    try:
+        data = request.get_json(
+            silent=True
+        ) or {}
+    except Exception:
+        data = {}
+
+    events = data.get(
         "events",
         []
     )
@@ -1092,7 +1129,7 @@ def callback():
             continue
 
         # -----------------------------------------
-        # 내 마딧수
+        # 명령어 공백 제거
         # -----------------------------------------
 
         normalized = re.sub(
@@ -1100,6 +1137,10 @@ def callback():
             "",
             text
         )
+
+        # -----------------------------------------
+        # 내 마딧수
+        # -----------------------------------------
 
         if normalized in [
             "내마딧수",
