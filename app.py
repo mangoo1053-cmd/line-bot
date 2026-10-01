@@ -28,47 +28,49 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 
 # =========================================================
-# 설정
+# 기본 설정
 # =========================================================
 
 KST = ZoneInfo("Asia/Seoul")
 
-# 일반 채팅 중 AI가 랜덤으로 개입할 확률
+# 랜덤 AI 개입 확률
 AI_TRIGGER_CHANCE = 0.03
 
-# AI 랜덤 개입 후 3시간 동안 다시 개입하지 않음
+# 랜덤 AI 개입 최소 간격
 AI_COOLDOWN_SECONDS = 3 * 60 * 60
 
-# AI가 참고할 최근 메시지 수
+# AI에게 보여줄 최근 대화 수
 RECENT_MESSAGE_LIMIT = 12
 
-# Gemini 모델 fallback 순서
+# Gemini 모델
+# 일반 질문은 첫 번째 모델을 빠르게 사용하고
+# 실패했을 때만 다음 모델로 넘어감
 GEMINI_MODELS = [
     "gemini-3.8-flash",
     "gemini-3.7-flash",
-    "gemini-3.6-flash",
-    "gemini-3.5-flash",
 ]
+
+# 일반 질문 최대 대기
+NORMAL_AI_TIMEOUT = 12
+
+# 실시간 검색 최대 대기
+SEARCH_AI_TIMEOUT = 18
 
 
 # =========================================================
-# 기본
+# 기본 페이지
 # =========================================================
 
 @app.route("/", methods=["GET"])
 def home():
-    return "LINE BOT IS RUNNING", 200
+    return "LINE Bot is running!", 200
 
 
 # =========================================================
-# Supabase
+# Supabase 요청
 # =========================================================
 
 def supabase_request(method, table, params=None, data=None):
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        print("Supabase 환경변수가 없습니다.")
-        return None
-
     url = f"{SUPABASE_URL}/rest/v1/{table}"
 
     headers = {
@@ -77,36 +79,26 @@ def supabase_request(method, table, params=None, data=None):
         "Content-Type": "application/json",
     }
 
-    if method.upper() == "POST":
-        headers["Prefer"] = "return=minimal"
+    if method.upper() in ["POST", "PATCH", "DELETE"]:
+        headers["Prefer"] = "return=representation"
 
     try:
         response = requests.request(
-            method,
-            url,
+            method=method,
+            url=url,
             headers=headers,
             params=params,
             json=data,
-            timeout=15
+            timeout=10,
         )
 
         if response.status_code >= 400:
-            print(
-                f"Supabase 오류: {response.status_code} "
-                f"{response.text}"
-            )
-            return None
+            print("SUPABASE ERROR:", response.status_code, response.text)
 
-        if response.text:
-            try:
-                return response.json()
-            except Exception:
-                return True
-
-        return True
+        return response
 
     except Exception as e:
-        print("Supabase 연결 오류:", e)
+        print("SUPABASE REQUEST ERROR:", e)
         return None
 
 
@@ -114,7 +106,7 @@ def supabase_request(method, table, params=None, data=None):
 # LINE API
 # =========================================================
 
-def line_api(endpoint, method="POST", data=None):
+def line_api(endpoint, payload):
     url = f"https://api.line.me/v2/bot/{endpoint}"
 
     headers = {
@@ -123,48 +115,40 @@ def line_api(endpoint, method="POST", data=None):
     }
 
     try:
-        response = requests.request(
-            method,
+        response = requests.post(
             url,
             headers=headers,
-            json=data,
-            timeout=15
+            json=payload,
+            timeout=10,
         )
 
+        print("LINE API:", endpoint, response.status_code)
+
         if response.status_code >= 400:
-            print(
-                f"LINE API 오류: {response.status_code} "
-                f"{response.text}"
-            )
-            return None
+            print(response.text)
 
-        if response.text:
-            try:
-                return response.json()
-            except Exception:
-                return True
-
-        return True
+        return response
 
     except Exception as e:
-        print("LINE API 연결 오류:", e)
+        print("LINE API ERROR:", e)
         return None
 
 
 def reply_message(reply_token, text):
-    return line_api(
-        "message/reply",
-        "POST",
-        {
-            "replyToken": reply_token,
-            "messages": [
-                {
-                    "type": "text",
-                    "text": text
-                }
-            ]
-        }
-    )
+    if not reply_token:
+        return
+
+    payload = {
+        "replyToken": reply_token,
+        "messages": [
+            {
+                "type": "text",
+                "text": text[:5000],
+            }
+        ],
+    }
+
+    line_api("message/reply", payload)
 
 
 # =========================================================
@@ -172,13 +156,25 @@ def reply_message(reply_token, text):
 # =========================================================
 
 def get_profile_name(user_id):
-    result = line_api(
-        f"profile/{user_id}",
-        "GET"
-    )
+    url = f"https://api.line.me/v2/bot/profile/{user_id}"
 
-    if result and isinstance(result, dict):
-        return result.get("displayName", "알 수 없음")
+    headers = {
+        "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}"
+    }
+
+    try:
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=5,
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            return data.get("displayName", "알 수 없음")
+
+    except Exception as e:
+        print("PROFILE ERROR:", e)
 
     return "알 수 없음"
 
@@ -189,15 +185,11 @@ def get_profile_name(user_id):
 
 def is_laugh_only(text):
     if not text:
-        return True
+        return False
 
     text = text.strip()
 
-    if not text:
-        return True
-
-    # ㅋㅋ, ㅋㅋㅋㅋ, ㅎㅎ, ㅠㅠ 등만 있는 경우 제외
-    return re.fullmatch(r"[ㅋㅎㅠㅜ]+", text) is not None
+    return bool(re.fullmatch(r"[ㅋㅎㅠㅜ]+", text))
 
 
 # =========================================================
@@ -212,15 +204,17 @@ def save_message(group_id, user_id, user_name, message):
         "user_id": user_id,
         "user_name": user_name,
         "message": message,
-        "date_kst": now.strftime("%Y-%m-%d"),
+        "date_kst": now.date().isoformat(),
         "hour_kst": now.hour,
     }
 
-    return supabase_request(
+    response = supabase_request(
         "POST",
         "chat_messages",
         data=data
     )
+
+    return response
 
 
 # =========================================================
@@ -228,25 +222,26 @@ def save_message(group_id, user_id, user_name, message):
 # =========================================================
 
 def get_today_count(group_id, user_id):
-    today = datetime.now(KST).strftime("%Y-%m-%d")
+    today = datetime.now(KST).date().isoformat()
 
-    params = {
-        "group_id": f"eq.{group_id}",
-        "user_id": f"eq.{user_id}",
-        "date_kst": f"eq.{today}",
-        "select": "id",
-    }
-
-    result = supabase_request(
+    response = supabase_request(
         "GET",
         "chat_messages",
-        params=params
+        params={
+            "select": "id",
+            "group_id": f"eq.{group_id}",
+            "user_id": f"eq.{user_id}",
+            "date_kst": f"eq.{today}",
+        }
     )
 
-    if result is None:
+    if not response or response.status_code >= 400:
         return 0
 
-    return len(result)
+    try:
+        return len(response.json())
+    except:
+        return 0
 
 
 # =========================================================
@@ -254,33 +249,37 @@ def get_today_count(group_id, user_id):
 # =========================================================
 
 def get_today_ranking(group_id):
-    today = datetime.now(KST).strftime("%Y-%m-%d")
+    today = datetime.now(KST).date().isoformat()
 
-    params = {
-        "group_id": f"eq.{group_id}",
-        "date_kst": f"eq.{today}",
-        "select": "user_id,user_name",
-    }
-
-    result = supabase_request(
+    response = supabase_request(
         "GET",
         "chat_messages",
-        params=params
+        params={
+            "select": "user_id,user_name",
+            "group_id": f"eq.{group_id}",
+            "date_kst": f"eq.{today}",
+            "order": "created_at.asc",
+        }
     )
 
-    if not result:
+    if not response or response.status_code >= 400:
+        return []
+
+    try:
+        messages = response.json()
+    except:
         return []
 
     users = {}
 
-    for row in result:
-        user_id = row.get("user_id")
-        user_name = row.get("user_name", "알 수 없음")
+    for item in messages:
+        user_id = item.get("user_id")
+        user_name = item.get("user_name", "알 수 없음")
 
         if user_id not in users:
             users[user_id] = {
                 "name": user_name,
-                "count": 0
+                "count": 0,
             }
 
         users[user_id]["count"] += 1
@@ -300,145 +299,137 @@ def get_today_ranking(group_id):
 # =========================================================
 
 def get_room_stats(group_id):
-    params = {
-        "group_id": f"eq.{group_id}",
-        "select": "user_id,date_kst,hour_kst",
-    }
-
-    result = supabase_request(
+    response = supabase_request(
         "GET",
         "chat_messages",
-        params=params
+        params={
+            "select": "user_id,date_kst",
+            "group_id": f"eq.{group_id}",
+        }
     )
 
-    if not result:
+    if not response or response.status_code >= 400:
         return {
             "total": 0,
-            "users": 0,
-            "best_day": "없음"
+            "people": 0,
+            "active_day": "없음",
         }
 
-    total = len(result)
+    try:
+        messages = response.json()
+    except:
+        messages = []
 
-    users = set()
-    day_count = {}
+    total = len(messages)
 
-    for row in result:
-        users.add(row.get("user_id"))
+    people = set()
+    days = {}
 
-        day = row.get("date_kst")
+    for item in messages:
+        user_id = item.get("user_id")
+        date = item.get("date_kst")
 
-        if day:
-            day_count[day] = day_count.get(day, 0) + 1
+        if user_id:
+            people.add(user_id)
 
-    best_day = "없음"
+        if date:
+            days[date] = days.get(date, 0) + 1
 
-    if day_count:
-        best_day = max(
-            day_count,
-            key=day_count.get
+    active_day = "없음"
+
+    if days:
+        active_day = max(
+            days,
+            key=days.get
         )
 
     return {
         "total": total,
-        "users": len(users),
-        "best_day": best_day
+        "people": len(people),
+        "active_day": active_day,
     }
 
 
 # =========================================================
-# 개인 통계
+# 개인 전체 통계
 # =========================================================
 
 def get_personal_stats(group_id, user_id):
-    params = {
-        "group_id": f"eq.{group_id}",
-        "user_id": f"eq.{user_id}",
-        "select": "date_kst,hour_kst",
-    }
-
-    result = supabase_request(
+    response = supabase_request(
         "GET",
         "chat_messages",
-        params=params
+        params={
+            "select": "user_id,user_name,hour_kst",
+            "group_id": f"eq.{group_id}",
+        }
     )
 
-    if not result:
+    if not response or response.status_code >= 400:
         return {
             "total": 0,
             "rank": 0,
-            "best_hour": "없음"
+            "active_hour": "없음",
         }
 
-    total = len(result)
+    try:
+        messages = response.json()
+    except:
+        messages = []
 
-    hour_count = {}
+    users = {}
+    hours = {}
 
-    for row in result:
-        hour = row.get("hour_kst")
+    my_name = "알 수 없음"
 
-        if hour is not None:
-            hour_count[hour] = hour_count.get(hour, 0) + 1
+    for item in messages:
+        uid = item.get("user_id")
+        hour = item.get("hour_kst")
 
-    best_hour = "없음"
+        if uid:
+            users[uid] = users.get(uid, 0) + 1
 
-    if hour_count:
-        best_hour_num = max(
-            hour_count,
-            key=hour_count.get
-        )
+        if uid == user_id:
+            my_name = item.get("user_name", "알 수 없음")
 
-        best_hour = f"{best_hour_num:02d}시"
+            if hour is not None:
+                hours[hour] = hours.get(hour, 0) + 1
 
-    # 전체 사용자 수 계산
-    all_params = {
-        "group_id": f"eq.{group_id}",
-        "select": "user_id",
-    }
+    my_total = users.get(user_id, 0)
 
-    all_result = supabase_request(
-        "GET",
-        "chat_messages",
-        params=all_params
+    sorted_users = sorted(
+        users.items(),
+        key=lambda x: x[1],
+        reverse=True
     )
 
-    rank = 1
+    rank = 0
 
-    if all_result:
-        counts = {}
+    for i, (uid, count) in enumerate(sorted_users, start=1):
+        if uid == user_id:
+            rank = i
+            break
 
-        for row in all_result:
-            uid = row.get("user_id")
+    active_hour = "없음"
 
-            if uid:
-                counts[uid] = counts.get(uid, 0) + 1
-
-        sorted_users = sorted(
-            counts.items(),
-            key=lambda x: x[1],
-            reverse=True
+    if hours:
+        active_hour = max(
+            hours,
+            key=hours.get
         )
 
-        for index, (uid, count) in enumerate(
-            sorted_users,
-            start=1
-        ):
-            if uid == user_id:
-                rank = index
-                break
-
     return {
-        "total": total,
+        "total": my_total,
         "rank": rank,
-        "best_hour": best_hour
+        "active_hour": active_hour,
+        "name": my_name,
     }
 
 
 # =========================================================
-# 이름 생성
+# 슈퍼스크립트
 # =========================================================
 
-SUPERSCRIPT_MAP = {
+SUPERSCRIPT = {
     "0": "⁰",
     "1": "¹",
     "2": "²",
@@ -453,123 +444,225 @@ SUPERSCRIPT_MAP = {
 
 
 def to_superscript(number):
-    number = str(number)
-
     return "".join(
-        SUPERSCRIPT_MAP.get(char, char)
-        for char in number
+        SUPERSCRIPT.get(char, char)
+        for char in str(number)
     )
 
+
+# =========================================================
+# 닉네임 생성
+# =========================================================
 
 def make_nickname(text):
     parts = text.strip().split()
 
-    # 이름 성별 나이 타입
     if len(parts) != 4:
         return None
 
     name = parts[0]
     gender = parts[1]
     age = parts[2]
-    type_word = parts[3]
+    kind = parts[3]
 
-    if not age.isdigit():
+    if not re.fullmatch(r"\d{1,2}", age):
         return None
 
-    if len(age) == 1:
-        age = "0" + age
+    age = age.zfill(2)
 
-    if len(age) != 2:
+    if kind == "돔":
+        letter = "𝒅"
+
+    elif kind == "섭":
+        letter = "𝒔"
+
+    elif kind == "스위치":
+        letter = "𝒔/𝒅"
+
+    elif kind == "바닐라":
+        letter = "𝒗"
+
+    else:
         return None
 
-    type_map = {
-        "돔": "𝒅",
-        "섭": "𝒔",
-        "스위치": "𝒔/𝒅",
-        "바닐라": "𝒗",
-    }
+    if gender == "여자":
+        emoji = "📡"
 
-    if type_word not in type_map:
+    elif gender == "남자":
+        emoji = "🔭"
+
+    else:
         return None
 
-    type_symbol = type_map[type_word]
-
-    gender_map = {
-        "여자": "📡",
-        "남자": "🔭",
-    }
-
-    if gender not in gender_map:
-        return None
-
-    gender_emoji = gender_map[gender]
-
-    return (
-        f"{name}"
-        f"{type_symbol}"
-        f"{to_superscript(age)}"
-        f"{gender_emoji}"
-    )
+    return f"{name}{letter}{to_superscript(age)}{emoji}"
 
 
 # =========================================================
-# 최근 채팅 가져오기
+# 최근 대화
 # =========================================================
 
-def get_recent_messages(group_id):
-    params = {
-        "group_id": f"eq.{group_id}",
-        "select": "user_name,message,created_at",
-        "order": "created_at.desc",
-        "limit": str(RECENT_MESSAGE_LIMIT),
-    }
-
-    result = supabase_request(
+def get_recent_messages(group_id, limit=RECENT_MESSAGE_LIMIT):
+    response = supabase_request(
         "GET",
         "chat_messages",
-        params=params
+        params={
+            "select": "user_name,message,created_at",
+            "group_id": f"eq.{group_id}",
+            "order": "created_at.desc",
+            "limit": str(limit),
+        }
     )
 
-    if not result:
+    if not response or response.status_code >= 400:
         return []
 
-    result.reverse()
+    try:
+        messages = response.json()
+    except:
+        return []
 
-    messages = []
-
-    for row in result:
-        name = row.get("user_name", "누군가")
-        message = row.get("message", "")
-
-        messages.append(
-            f"{name}: {message}"
-        )
+    messages.reverse()
 
     return messages
 
 
 # =========================================================
-# Gemini AI
+# 실시간 검색이 필요한 질문인지 판단
 # =========================================================
 
-def ask_gemini(prompt):
+def needs_realtime_search(prompt):
+    text = prompt.lower().strip()
+
+    realtime_keywords = [
+        # 시간
+        "지금",
+        "현재",
+        "오늘",
+        "오늘날짜",
+        "오늘 날짜",
+        "내일",
+        "어제",
+        "이번주",
+        "이번 주",
+        "이번달",
+        "이번 달",
+
+        # 최신
+        "최신",
+        "최근",
+        "요즘",
+        "현재 상황",
+        "업데이트",
+
+        # 뉴스
+        "뉴스",
+        "속보",
+        "사건",
+        "사고",
+
+        # 날씨
+        "날씨",
+        "기온",
+        "비 와",
+        "비와",
+        "눈 와",
+        "눈와",
+        "미세먼지",
+
+        # 스포츠
+        "경기 결과",
+        "경기결과",
+        "스코어",
+        "점수",
+        "순위",
+        "경기 일정",
+        "경기일정",
+
+        # 돈
+        "환율",
+        "주가",
+        "주식",
+        "코인",
+        "비트코인",
+        "가격",
+        "시세",
+
+        # 일정
+        "일정",
+        "예매",
+        "예약",
+
+        # 검색 의도
+        "검색해",
+        "찾아줘",
+        "찾아봐",
+        "인터넷에서",
+        "웹에서",
+    ]
+
+    for keyword in realtime_keywords:
+        if keyword in text:
+            return True
+
+    return False
+
+
+# =========================================================
+# Gemini 호출
+# =========================================================
+
+def ask_gemini(prompt, use_google_search=False):
     if not GEMINI_API_KEY:
-        print("GEMINI_API_KEY가 없습니다.")
-        return None
+        return "GEMINI_API_KEY가 설정되지 않았어."
 
-    for model in GEMINI_MODELS:
+    if use_google_search:
+        timeout = SEARCH_AI_TIMEOUT
+    else:
+        timeout = NORMAL_AI_TIMEOUT
 
-        print(f"Gemini 모델 시도: {model}")
+    system_instruction = """
+너는 LINE 단체 채팅방에서 사용하는 친근한 AI야.
+
+사용자의 질문에 자연스럽고 정확하게 답해.
+한국어로 답해.
+
+일반 질문:
+- 너무 길게 설명하지 말 것
+- 핵심부터 답할 것
+- 친구처럼 자연스럽게 말할 것
+- 필요하면 짧은 예시를 들 것
+- 모르는 내용은 아는 척하지 말 것
+
+실시간 검색이 제공된 경우:
+- 검색 결과를 참고해서 현재 정보를 답할 것
+- 검색 결과와 맞지 않는 내용을 임의로 만들지 말 것
+- 필요한 경우 날짜나 시점을 명확히 말할 것
+
+답변에는 불필요한 'AI입니다' 같은 말을 넣지 마.
+"""
+
+    for model_index, model in enumerate(GEMINI_MODELS):
 
         url = (
             "https://generativelanguage.googleapis.com/"
             f"v1beta/models/{model}:generateContent"
-            f"?key={GEMINI_API_KEY}"
         )
 
+        params = {
+            "key": GEMINI_API_KEY
+        }
+
         payload = {
+            "system_instruction": {
+                "parts": [
+                    {
+                        "text": system_instruction
+                    }
+                ]
+            },
             "contents": [
                 {
+                    "role": "user",
                     "parts": [
                         {
                             "text": prompt
@@ -578,245 +671,229 @@ def ask_gemini(prompt):
                 }
             ],
             "generationConfig": {
-                "temperature": 0.9,
-                "maxOutputTokens": 300,
+                "temperature": 0.8,
+                "maxOutputTokens": 500,
             }
         }
 
-        # 같은 모델에서 최대 3번 재시도
-        for attempt in range(3):
+        if use_google_search:
+            payload["tools"] = [
+                {
+                    "google_search": {}
+                }
+            ]
 
-            try:
-                response = requests.post(
-                    url,
-                    json=payload,
-                    timeout=30
+        try:
+            start_time = time.time()
+
+            response = requests.post(
+                url,
+                params=params,
+                json=payload,
+                timeout=timeout,
+            )
+
+            elapsed = round(
+                time.time() - start_time,
+                2
+            )
+
+            print(
+                f"GEMINI {model} "
+                f"status={response.status_code} "
+                f"time={elapsed}s"
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+
+                candidates = data.get(
+                    "candidates",
+                    []
                 )
 
-                # 성공
-                if response.status_code == 200:
-
-                    data = response.json()
-
-                    candidates = data.get(
-                        "candidates",
-                        []
-                    )
-
-                    if not candidates:
-                        print(
-                            f"{model}: candidates 없음"
-                        )
-                        break
-
-                    content = candidates[0].get(
-                        "content",
-                        {}
-                    )
-
-                    parts = content.get(
-                        "parts",
-                        []
-                    )
-
-                    if not parts:
-                        print(
-                            f"{model}: parts 없음"
-                        )
-                        break
-
-                    answer = parts[0].get(
-                        "text",
-                        ""
-                    ).strip()
-
-                    if answer:
-                        print(
-                            f"Gemini 성공: {model}"
-                        )
-                        return answer
-
-                    break
-
-                # 일시적인 오류
-                if response.status_code in [
-                    408,
-                    429,
-                    500,
-                    502,
-                    503,
-                    504
-                ]:
-
-                    print(
-                        f"Gemini 일시적 오류 "
-                        f"{response.status_code} "
-                        f"({model}) "
-                        f"({attempt + 1}/3)"
-                    )
-
-                    if attempt < 2:
-                        wait_time = [1, 3, 7][attempt]
-                        time.sleep(wait_time)
-                        continue
-
-                    # 같은 모델 3회 실패
-                    print(
-                        f"{model} 3회 실패 → "
-                        f"다음 모델로 이동"
-                    )
-
-                    break
-
-                # 그 외 오류
-                print(
-                    f"Gemini 오류 "
-                    f"{response.status_code}: "
-                    f"{response.text}"
-                )
-
-                break
-
-            except requests.exceptions.Timeout:
-
-                print(
-                    f"Gemini Timeout "
-                    f"({model}) "
-                    f"({attempt + 1}/3)"
-                )
-
-                if attempt < 2:
-                    wait_time = [1, 3, 7][attempt]
-                    time.sleep(wait_time)
+                if not candidates:
                     continue
 
-                break
-
-            except Exception as e:
-
-                print(
-                    f"Gemini 예외 "
-                    f"({model}): {e}"
+                content = candidates[0].get(
+                    "content",
+                    {}
                 )
 
-                break
+                parts = content.get(
+                    "parts",
+                    []
+                )
 
-    print("모든 Gemini 모델 실패")
+                texts = []
+
+                for part in parts:
+                    if "text" in part:
+                        texts.append(
+                            part["text"]
+                        )
+
+                result = "".join(texts).strip()
+
+                if result:
+                    return result
+
+            # 서버가 바쁘거나 일시적인 오류일 때
+            if response.status_code in [
+                408,
+                429,
+                500,
+                502,
+                503,
+                504
+            ]:
+
+                print(
+                    f"{model} temporarily unavailable"
+                )
+
+                # 첫 모델 실패 시 두 번째 모델로 바로 넘어감
+                # 긴 재시도 대기는 하지 않음
+                continue
+
+            print(
+                "GEMINI ERROR:",
+                response.status_code,
+                response.text
+            )
+
+        except requests.exceptions.Timeout:
+            print(
+                f"GEMINI TIMEOUT: {model}"
+            )
+
+        except Exception as e:
+            print(
+                "GEMINI EXCEPTION:",
+                e
+            )
 
     return None
 
 
 # =========================================================
-# ! 질문
+# ! 질문 처리
 # =========================================================
 
-def answer_exclamation_question(question):
-    if not question.strip():
-        return "뭘 물어보는 거야? 😶"
+def answer_exclamation_question(prompt):
+    prompt = prompt.strip()
 
-    prompt = f"""
-너는 LINE 단체채팅방에서 친구처럼 대화하는 AI야.
+    if not prompt:
+        return "질문을 입력해줘."
 
-사용자가 보낸 질문:
-{question}
+    realtime = needs_realtime_search(prompt)
 
-규칙:
-- 한국어로 답해.
-- 너무 길게 설명하지 마.
-- 자연스럽고 편하게 답해.
-- 친구가 물어본 것처럼 답해.
-- 필요한 경우에만 자세히 설명해.
-- 모르는 것은 모른다고 말해.
-- 사실을 지어내지 마.
-- 정치, 종교, 성적인 내용, 개인정보, 싸움이나 위험한 행동 등 민감한 주제는 중립적으로 답해.
-"""
+    print(
+        "AI QUESTION:",
+        prompt,
+        "| realtime:",
+        realtime
+    )
 
-    return ask_gemini(prompt)
+    return ask_gemini(
+        prompt,
+        use_google_search=realtime
+    )
 
 
 # =========================================================
-# 마지막 AI 개입 시간
+# 마지막 랜덤 AI 답변 시간
 # =========================================================
 
 def get_last_ai_reply(group_id):
-    params = {
-        "group_id": f"eq.{group_id}",
-        "select": "last_ai_reply",
-        "limit": "1",
-    }
-
-    result = supabase_request(
+    response = supabase_request(
         "GET",
         "bot_state",
-        params=params
+        params={
+            "select": "last_ai_reply",
+            "group_id": f"eq.{group_id}",
+            "limit": "1",
+        }
     )
 
-    if not result:
-        return None
-
-    value = result[0].get("last_ai_reply")
-
-    if not value:
+    if not response or response.status_code >= 400:
         return None
 
     try:
+        data = response.json()
+
+        if not data:
+            return None
+
+        value = data[0].get("last_ai_reply")
+
+        if not value:
+            return None
+
         return datetime.fromisoformat(
             value.replace("Z", "+00:00")
         )
 
-    except Exception:
+    except Exception as e:
+        print("LAST AI TIME ERROR:", e)
         return None
 
 
 def update_last_ai_reply(group_id):
     now = datetime.now(timezone.utc).isoformat()
 
-    # 먼저 존재 여부 확인
-    params = {
-        "group_id": f"eq.{group_id}",
-        "select": "group_id",
-        "limit": "1",
-    }
-
-    result = supabase_request(
+    # 먼저 존재하는지 확인
+    response = supabase_request(
         "GET",
         "bot_state",
-        params=params
+        params={
+            "select": "group_id",
+            "group_id": f"eq.{group_id}",
+            "limit": "1",
+        }
     )
 
-    data = {
-        "group_id": group_id,
-        "last_ai_reply": now
-    }
+    exists = False
 
-    if result:
+    if response and response.status_code < 400:
+        try:
+            exists = len(response.json()) > 0
+        except:
+            exists = False
+
+    if exists:
         supabase_request(
             "PATCH",
             "bot_state",
             params={
                 "group_id": f"eq.{group_id}"
             },
-            data=data
+            data={
+                "last_ai_reply": now
+            }
         )
 
     else:
         supabase_request(
             "POST",
             "bot_state",
-            data=data
+            data={
+                "group_id": group_id,
+                "last_ai_reply": now
+            }
         )
 
 
 # =========================================================
-# AI 랜덤 개입
+# 랜덤 AI 개입
 # =========================================================
 
 def maybe_ai_intervene(group_id):
-    # 확률 체크
+    # 확률
     if random.random() > AI_TRIGGER_CHANCE:
         return None
 
-    # 마지막 개입 시간 확인
+    # 마지막 AI 답변 시간 확인
     last_reply = get_last_ai_reply(group_id)
 
     if last_reply:
@@ -829,61 +906,78 @@ def maybe_ai_intervene(group_id):
         if elapsed < AI_COOLDOWN_SECONDS:
             return None
 
-    recent_messages = get_recent_messages(group_id)
+    recent = get_recent_messages(
+        group_id,
+        RECENT_MESSAGE_LIMIT
+    )
 
-    if not recent_messages:
+    if not recent:
         return None
 
-    chat_text = "\n".join(recent_messages)
+    conversation = []
+
+    for item in recent:
+        name = item.get(
+            "user_name",
+            "알 수 없음"
+        )
+
+        message = item.get(
+            "message",
+            ""
+        )
+
+        conversation.append(
+            f"{name}: {message}"
+        )
+
+    conversation_text = "\n".join(
+        conversation
+    )
 
     prompt = f"""
-너는 LINE 단체채팅방에 들어와 있는 친구 같은 AI야.
+다음은 LINE 단체 채팅방의 최근 대화야.
 
-최근 대화:
-{chat_text}
+{conversation_text}
 
-지금 이 대화에 네가 자연스럽게 한마디 끼어들 만한 상황인지 판단해.
+너는 이 채팅방의 평범한 참가자야.
 
-중요:
-- 억지로 끼어들지 마.
-- 특별히 할 말이 없으면 반드시 NO라고 답해.
-- 자연스럽게 반응할 이유가 있을 때만 YES로 답해.
-- 너무 진지하거나 민감한 주제에는 끼어들지 마.
-- 정치, 종교, 성적인 이야기, 개인정보, 싸움 등에는 개입하지 마.
-- 친구 단톡방처럼 짧고 자연스럽게 말해.
-- 너무 AI 같은 말투를 사용하지 마.
-- 같은 표현을 반복하지 마.
+지금 대화에 자연스럽게 끼어들 만한 상황인지 판단해.
 
-형식은 반드시 아래 둘 중 하나:
-
-NO
-
-또는
-
+정말 끼어들 이유가 있을 때만:
 YES|짧은 답변
 
-답변은 최대 1~2문장으로 해.
+끼어들 필요가 없으면:
+NO
+
+규칙:
+- 억지로 끼어들지 마
+- 아무 말이나 하지 마
+- 너무 자주 말하지 마
+- 정치, 종교, 성적인 내용, 개인정보, 심각한 싸움이나 민감한 주제에는 개입하지 마
+- 친구처럼 자연스럽게 말해
+- 짧게 답해
 """
 
-    answer = ask_gemini(prompt)
+    result = ask_gemini(
+        prompt,
+        use_google_search=False
+    )
 
-    if not answer:
+    if not result:
         return None
 
-    answer = answer.strip()
+    result = result.strip()
 
-    if answer.upper() == "NO":
+    if result.upper() == "NO":
         return None
 
-    if answer.upper().startswith("YES|"):
-        reply = answer[4:].strip()
+    if result.upper().startswith("YES|"):
+        reply = result[4:].strip()
 
-        if not reply:
-            return None
-
-        update_last_ai_reply(group_id)
-
-        return reply
+        if reply:
+            update_last_ai_reply(group_id)
+            return reply
 
     return None
 
@@ -893,26 +987,33 @@ YES|짧은 답변
 # =========================================================
 
 def reset_today(group_id):
-    today = datetime.now(KST).strftime("%Y-%m-%d")
+    today = datetime.now(KST).date().isoformat()
 
-    params = {
-        "group_id": f"eq.{group_id}",
-        "date_kst": f"eq.{today}",
-    }
-
-    return supabase_request(
+    response = supabase_request(
         "DELETE",
         "chat_messages",
-        params=params
+        params={
+            "group_id": f"eq.{group_id}",
+            "date_kst": f"eq.{today}",
+        }
     )
+
+    if response and response.status_code < 400:
+        return True
+
+    return False
 
 
 # =========================================================
-# 웹훅
+# LINE Webhook
 # =========================================================
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
+
+    # -----------------------------------------------------
+    # LINE Signature 확인
+    # -----------------------------------------------------
 
     body = request.get_data(as_text=True)
 
@@ -921,7 +1022,9 @@ def webhook():
         ""
     )
 
-    # LINE 서명 검증
+    if not signature:
+        abort(400)
+
     hash_value = hmac.new(
         CHANNEL_SECRET.encode("utf-8"),
         body.encode("utf-8"),
@@ -936,89 +1039,88 @@ def webhook():
         signature,
         expected_signature
     ):
-        print("LINE 서명 검증 실패")
         abort(400)
+
+    # -----------------------------------------------------
+    # JSON
+    # -----------------------------------------------------
 
     try:
         data = json.loads(body)
-
-    except Exception:
+    except:
         abort(400)
 
     events = data.get("events", [])
 
     for event in events:
 
-        # 메시지 이벤트가 아니면 무시
         if event.get("type") != "message":
             continue
 
-        message = event.get("message", {})
+        message = event.get(
+            "message",
+            {}
+        )
 
-        # 텍스트만 처리
         if message.get("type") != "text":
             continue
 
-        text = message.get("text", "").strip()
+        text = message.get(
+            "text",
+            ""
+        ).strip()
 
-        if not text:
-            continue
+        source = event.get(
+            "source",
+            {}
+        )
 
-        source = event.get("source", {})
+        # -------------------------------------------------
+        # 그룹 채팅만 사용
+        # -------------------------------------------------
 
-        # 단체방만 처리
         if source.get("type") != "group":
             continue
 
         group_id = source.get("groupId")
         user_id = source.get("userId")
 
-        reply_token = event.get("replyToken")
+        reply_token = event.get(
+            "replyToken"
+        )
 
+        if not group_id or not user_id:
+            continue
+
+        # -------------------------------------------------
         # 사용자 이름
-        user_name = get_profile_name(user_id)
+        # -------------------------------------------------
 
+        user_name = get_profile_name(
+            user_id
+        )
 
         # =================================================
-        # 이름 생성 기능
+        # 닉네임 생성
         # =================================================
 
         nickname = make_nickname(text)
 
         if nickname:
-
             reply_message(
                 reply_token,
                 nickname
             )
-
             continue
 
-
         # =================================================
-        # 오늘 소통량 초기화
+        # 오늘 소통량
         # =================================================
 
-        normalized = text.replace(" ", "")
-
-        if normalized in [
-            "단라소통량초기화",
-            "소통량초기화"
-        ]:
-
-            reset_today(group_id)
-
-            reply_message(
-                reply_token,
-                "오늘 소통량을 초기화했어."
-            )
-
-            continue
-
-
-        # =================================================
-        # 내 마딧수
-        # =================================================
+        normalized = text.replace(
+            " ",
+            ""
+        )
 
         if normalized in [
             "내마딧수",
@@ -1032,12 +1134,10 @@ def webhook():
 
             reply_message(
                 reply_token,
-                f"{user_name}님의 오늘 소통량은 "
-                f"{count}개야."
+                f"{user_name}님의 오늘 소통량은 {count}개야."
             )
 
             continue
-
 
         # =================================================
         # 단라 소통량
@@ -1050,7 +1150,6 @@ def webhook():
             )
 
             if not ranking:
-
                 reply_message(
                     reply_token,
                     "오늘 아직 소통량이 없어."
@@ -1060,15 +1159,15 @@ def webhook():
 
             result = "🏆 단라 소통량 순위\n\n"
 
-            for index, user in enumerate(
-                ranking,
+            for i, item in enumerate(
+                ranking[:20],
                 start=1
             ):
 
                 result += (
-                    f"{index}위 "
-                    f"{user['name']} "
-                    f"{user['count']}개\n"
+                    f"{i}위 "
+                    f"{item['name']} "
+                    f"{item['count']}개\n"
                 )
 
             reply_message(
@@ -1078,6 +1177,28 @@ def webhook():
 
             continue
 
+        # =================================================
+        # 소통량 초기화
+        # =================================================
+
+        if normalized == "단라소통량초기화":
+
+            success = reset_today(
+                group_id
+            )
+
+            if success:
+                reply_message(
+                    reply_token,
+                    "오늘 소통량을 초기화했어."
+                )
+            else:
+                reply_message(
+                    reply_token,
+                    "초기화 중 오류가 발생했어."
+                )
+
+            continue
 
         # =================================================
         # 방 통계
@@ -1092,8 +1213,9 @@ def webhook():
             result = (
                 "📊 방 통계\n\n"
                 f"총 메시지: {stats['total']}개\n"
-                f"참여 인원: {stats['users']}명\n"
-                f"가장 활발했던 날: {stats['best_day']}"
+                f"참여 인원: {stats['people']}명\n"
+                f"가장 활발했던 날: "
+                f"{stats['active_day']}"
             )
 
             reply_message(
@@ -1102,7 +1224,6 @@ def webhook():
             )
 
             continue
-
 
         # =================================================
         # 내 통계
@@ -1115,12 +1236,23 @@ def webhook():
                 user_id
             )
 
+            if stats["rank"] == 0:
+                rank_text = "순위 없음"
+            else:
+                rank_text = f"{stats['rank']}위"
+
+            if stats["active_hour"] == "없음":
+                hour_text = "없음"
+            else:
+                hour_text = (
+                    f"{stats['active_hour']}시"
+                )
+
             result = (
                 f"📊 {user_name}님의 통계\n\n"
                 f"총 소통량: {stats['total']}개\n"
-                f"방 내 순위: {stats['rank']}위\n"
-                f"가장 활발한 시간: "
-                f"{stats['best_hour']}"
+                f"방 내 순위: {rank_text}\n"
+                f"가장 활발한 시간: {hour_text}"
             )
 
             reply_message(
@@ -1130,66 +1262,63 @@ def webhook():
 
             continue
 
-
         # =================================================
-        # ! 로 시작하면 무조건 AI 질문
+        # ! AI 질문
         # =================================================
 
         if text.startswith("!"):
 
-            question = text[1:].strip()
+            prompt = text[1:].strip()
 
             answer = answer_exclamation_question(
-                question
+                prompt
             )
 
             if answer:
-
                 reply_message(
                     reply_token,
                     answer
                 )
-
             else:
-
                 reply_message(
                     reply_token,
-                    "잠깐, 지금은 답변을 못하겠어."
+                    "지금 AI가 응답하지 못했어. 잠시 후 다시 물어봐줘."
                 )
 
-            # AI 질문은 소통량에 포함하지 않음
+            # ! 질문은 소통량에 포함하지 않음
             continue
-
 
         # =================================================
         # 일반 메시지
         # =================================================
 
-        # ㅋㅋㅋㅋ / ㅎㅎ / ㅠㅠ 같은 메시지는 저장하지 않음
-        if not is_laugh_only(text):
+        # ㅋㅋㅋㅋ / ㅎㅎ / ㅠㅠ 등만 있는 메시지는 제외
+        if is_laugh_only(text):
+            continue
 
-            save_message(
-                group_id,
-                user_id,
-                user_name,
-                text
+        # 정상 메시지 저장
+        save_message(
+            group_id,
+            user_id,
+            user_name,
+            text
+        )
+
+        # =================================================
+        # 랜덤 AI 개입
+        # =================================================
+
+        ai_reply = maybe_ai_intervene(
+            group_id
+        )
+
+        if ai_reply:
+
+            # 랜덤 AI 개입은 reply token을 사용
+            reply_message(
+                reply_token,
+                ai_reply
             )
-
-
-            # =================================================
-            # 랜덤 AI 개입
-            # =================================================
-
-            ai_reply = maybe_ai_intervene(
-                group_id
-            )
-
-            if ai_reply:
-
-                reply_message(
-                    reply_token,
-                    ai_reply
-                )
 
     return "OK", 200
 
@@ -1199,11 +1328,10 @@ def webhook():
 # =========================================================
 
 if __name__ == "__main__":
-
     port = int(
         os.environ.get(
             "PORT",
-            5000
+            10000
         )
     )
 
