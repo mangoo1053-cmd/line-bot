@@ -35,7 +35,8 @@ KST = ZoneInfo("Asia/Seoul")
 
 AI_TRIGGER_CHANCE = 0.03
 
-AI_COOLDOWN_SECONDS = 3 * 60 * 60
+# ★ 랜덤 AI 쿨타임: 3시간 → 1시간
+AI_COOLDOWN_SECONDS = 1 * 60 * 60
 
 RECENT_MESSAGE_LIMIT = 12
 
@@ -270,7 +271,6 @@ def supabase_post(table, data):
         return None
 
     headers = supabase_headers()
-
     headers["Prefer"] = "return=minimal"
 
     try:
@@ -304,7 +304,6 @@ def supabase_patch(table, params, data):
         return None
 
     headers = supabase_headers()
-
     headers["Prefer"] = "return=minimal"
 
     try:
