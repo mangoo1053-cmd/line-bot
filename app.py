@@ -183,25 +183,37 @@ def push_message(group_id, text):
 # LINE 프로필
 # =========================================================
 
-def get_profile_name(user_id):
+def get_profile_name(user_id, group_id=None):
     if not user_id:
         return "알 수 없음"
 
-    url = (
-        "https://api.line.me/v2/bot/profile/"
-        f"{user_id}"
-    )
-
     headers = {
-        "Authorization":
-            f"Bearer {CHANNEL_ACCESS_TOKEN}"
+        "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}"
     }
 
     try:
+        # 그룹 채팅에서는 그룹 멤버 프로필 API 사용
+        if group_id:
+            url = (
+                "https://api.line.me/v2/bot/group/"
+                f"{group_id}/member/{user_id}"
+            )
+        else:
+            url = (
+                "https://api.line.me/v2/bot/profile/"
+                f"{user_id}"
+            )
+
         response = requests.get(
             url,
             headers=headers,
             timeout=5
+        )
+
+        print(
+            "PROFILE API:",
+            response.status_code,
+            response.text[:500]
         )
 
         if response.status_code == 200:
@@ -219,6 +231,7 @@ def get_profile_name(user_id):
         )
 
     return "알 수 없음"
+
 
 
 # =========================================================
@@ -1617,7 +1630,8 @@ def webhook():
         # =================================================
 
         user_name = get_profile_name(
-            user_id
+            user_id,
+            group_id
         )
 
         # =================================================
