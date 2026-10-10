@@ -1799,6 +1799,160 @@ def maybe_start_random_ai(
     thread.start()
 
 
+
+# =========================================================
+# 블랙잭 (사용자 vs 봇)
+# 방 + 사용자별로 게임을 분리해 동시에 플레이 가능
+# =========================================================
+
+BLACKJACK_GAMES = {}
+BLACKJACK_SUITS = ["♠️", "♥️", "♦️", "♣️"]
+BLACKJACK_RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
+
+
+def blackjack_new_deck():
+    deck = [(rank, suit) for suit in BLACKJACK_SUITS for rank in BLACKJACK_RANKS]
+    random.shuffle(deck)
+    return deck
+
+
+def blackjack_card_value(rank):
+    if rank == "A":
+        return 11
+    if rank in ("J", "Q", "K"):
+        return 10
+    return int(rank)
+
+
+def blackjack_score(cards):
+    score = sum(blackjack_card_value(rank) for rank, _ in cards)
+    aces = sum(1 for rank, _ in cards if rank == "A")
+    while score > 21 and aces:
+        score -= 10
+        aces -= 1
+    return score
+
+
+def blackjack_cards_text(cards):
+    return "  ".join(f"{rank}{suit}" for rank, suit in cards)
+
+
+def blackjack_dealer_text(cards, hide_second=False):
+    if hide_second and len(cards) >= 2:
+        visible = blackjack_cards_text(cards[:1]) + "  🂠"
+        return f"🤖 딜러\n🃏 {visible}\n합계: ?"
+    return f"🤖 딜러\n🃏 {blackjack_cards_text(cards)}\n합계: {blackjack_score(cards)}"
+
+
+def blackjack_finish_text(player_name, game, reason=""):
+    player_score = blackjack_score(game["player_cards"])
+    dealer_score = blackjack_score(game["dealer_cards"])
+
+    if player_score > 21:
+        result = "💥 버스트! 네가 21을 넘어서 패배했어."
+    elif dealer_score > 21:
+        result = "🎉 딜러가 버스트했어! 네 승리!"
+    elif player_score > dealer_score:
+        result = "🎉 네 승리!"
+    elif player_score < dealer_score:
+        result = "😢 딜러 승리!"
+    else:
+        result = "🤝 무승부!"
+
+    prefix = f"{reason}\n" if reason else ""
+    return (
+        f"{prefix}🎰 블랙잭 결과\n\n"
+        f"👤 {player_name}\n🃏 {blackjack_cards_text(game['player_cards'])}\n합계: {player_score}\n\n"
+        f"{blackjack_dealer_text(game['dealer_cards'])}\n\n"
+        f"{result}\n\n새 게임은 `블랙잭`을 입력해!"
+    )
+
+
+def blackjack_start(group_id, user_id, user_name):
+    key = (group_id, user_id)
+    if key in BLACKJACK_GAMES:
+        return "이미 블랙잭을 하고 있어! `히트` 또는 `스탠드`를 입력해.\n그만하려면 `블랙잭 종료`를 입력해."
+
+    deck = blackjack_new_deck()
+    game = {
+        "deck": deck,
+        "player_cards": [deck.pop(), deck.pop()],
+        "dealer_cards": [deck.pop(), deck.pop()],
+        "user_name": user_name,
+    }
+    BLACKJACK_GAMES[key] = game
+
+    player_score = blackjack_score(game["player_cards"])
+    dealer_score = blackjack_score(game["dealer_cards"])
+
+    # 처음부터 21인 경우 즉시 결과 처리
+    if player_score == 21 or dealer_score == 21:
+        del BLACKJACK_GAMES[key]
+        if player_score == 21 and dealer_score == 21:
+            return blackjack_finish_text(user_name, game, "처음 받은 카드로 둘 다 블랙잭!")
+        if player_score == 21:
+            return blackjack_finish_text(user_name, game, "🃏 블랙잭! 처음 받은 카드로 21을 만들었어!")
+        return blackjack_finish_text(user_name, game, "딜러가 처음부터 블랙잭이야!")
+
+    return (
+        f"🎰 블랙잭 시작!\n\n"
+        f"👤 {user_name}\n🃏 {blackjack_cards_text(game['player_cards'])}\n합계: {player_score}\n\n"
+        f"{blackjack_dealer_text(game['dealer_cards'], hide_second=True)}\n\n"
+        "`히트` — 카드 한 장 더 받기\n"
+        "`스탠드` — 카드 받기 멈추기\n"
+        "`블랙잭 종료` — 게임 종료"
+    )
+
+
+def blackjack_hit(group_id, user_id, user_name):
+    key = (group_id, user_id)
+    game = BLACKJACK_GAMES.get(key)
+    if not game:
+        return "진행 중인 블랙잭이 없어! 먼저 `블랙잭`을 입력해."
+
+    if not game["deck"]:
+        game["deck"] = blackjack_new_deck()
+
+    game["player_cards"].append(game["deck"].pop())
+    score = blackjack_score(game["player_cards"])
+
+    if score >= 21:
+        if score > 21:
+            # 버스트: 딜러 카드도 공개하고 종료
+            del BLACKJACK_GAMES[key]
+            return blackjack_finish_text(user_name, game)
+        # 21이면 자동 스탠드 후 딜러 진행
+        while blackjack_score(game["dealer_cards"]) < 17 and game["deck"]:
+            game["dealer_cards"].append(game["deck"].pop())
+        del BLACKJACK_GAMES[key]
+        return blackjack_finish_text(user_name, game, "21을 만들었어! 딜러 차례야.")
+
+    return (
+        f"👤 {user_name}\n🃏 {blackjack_cards_text(game['player_cards'])}\n합계: {score}\n\n"
+        f"{blackjack_dealer_text(game['dealer_cards'], hide_second=True)}\n\n"
+        "`히트` 또는 `스탠드`를 입력해!"
+    )
+
+
+def blackjack_stand(group_id, user_id, user_name):
+    key = (group_id, user_id)
+    game = BLACKJACK_GAMES.get(key)
+    if not game:
+        return "진행 중인 블랙잭이 없어! 먼저 `블랙잭`을 입력해."
+
+    while blackjack_score(game["dealer_cards"]) < 17 and game["deck"]:
+        game["dealer_cards"].append(game["deck"].pop())
+
+    del BLACKJACK_GAMES[key]
+    return blackjack_finish_text(user_name, game)
+
+
+def blackjack_cancel(group_id, user_id):
+    key = (group_id, user_id)
+    if BLACKJACK_GAMES.pop(key, None) is None:
+        return "종료할 블랙잭 게임이 없어."
+    return "🛑 블랙잭을 종료했어. 다시 하려면 `블랙잭`을 입력해!"
+
 # =========================================================
 # Webhook
 # =========================================================
@@ -1982,6 +2136,38 @@ def webhook():
             "",
             text
         )
+
+        # =================================================
+        # 블랙잭 명령어 (Reply API만 사용)
+        # =================================================
+
+        if normalized in ["블랙잭종료", "종료블랙잭"]:
+            reply_message(
+                reply_token,
+                blackjack_cancel(group_id, user_id)
+            )
+            continue
+
+        if normalized in ["블랙잭", "블랙잭시작"]:
+            reply_message(
+                reply_token,
+                blackjack_start(group_id, user_id, user_name)
+            )
+            continue
+
+        if normalized in ["히트", "카드더", "한장더"]:
+            reply_message(
+                reply_token,
+                blackjack_hit(group_id, user_id, user_name)
+            )
+            continue
+
+        if normalized in ["스탠드", "스탑", "멈춤"]:
+            reply_message(
+                reply_token,
+                blackjack_stand(group_id, user_id, user_name)
+            )
+            continue
 
         # =================================================
         # 소통량 초기화
