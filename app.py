@@ -33,12 +33,19 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 KST = ZoneInfo("Asia/Seoul")
 
+# 랜덤 AI 개입 확률
 AI_TRIGGER_CHANCE = 0.03
 
 # 랜덤 AI 쿨타임: 1시간
 AI_COOLDOWN_SECONDS = 1 * 60 * 60
 
+# 최근 대화 개수
 RECENT_MESSAGE_LIMIT = 12
+
+
+# =========================================================
+# Gemini 모델
+# =========================================================
 
 # 일반 AI
 NORMAL_GEMINI_MODELS = [
@@ -75,6 +82,7 @@ def now_utc_iso():
 # =========================================================
 
 def verify_signature(body, signature):
+
     if not CHANNEL_SECRET:
         return False
 
@@ -146,9 +154,14 @@ def line_api(endpoint, payload):
         return None
 
 
+# =========================================================
+# Reply API
+# =========================================================
+
 def reply_message(reply_token, text):
 
     if not reply_token:
+        print("REPLY ERROR: replyToken 없음")
         return
 
     text = str(text)
@@ -156,7 +169,7 @@ def reply_message(reply_token, text):
     if len(text) > 4900:
         text = text[:4900]
 
-    line_api(
+    response = line_api(
         "message/reply",
         {
             "replyToken":
@@ -171,6 +184,17 @@ def reply_message(reply_token, text):
         }
     )
 
+    if response is not None:
+        print(
+            "REPLY MESSAGE STATUS:",
+            response.status_code
+        )
+
+
+# =========================================================
+# Push API
+# 랜덤 AI에서 사용
+# =========================================================
 
 def push_message(group_id, text):
 
@@ -337,8 +361,6 @@ def supabase_get_all(
     """
     Supabase REST API에서
     1000개씩 나눠서 전체 데이터를 가져온다.
-
-    기존 데이터는 삭제하지 않는다.
     """
 
     if not SUPABASE_URL or not SUPABASE_KEY:
@@ -348,7 +370,6 @@ def supabase_get_all(
         params or {}
     )
 
-    # 기존 limit / offset 제거
     base_params.pop(
         "limit",
         None
@@ -416,7 +437,6 @@ def supabase_get_all(
                 f"total={len(all_rows)}"
             )
 
-            # 마지막 페이지
             if len(rows) < SUPABASE_PAGE_SIZE:
                 break
 
@@ -564,9 +584,6 @@ def get_event_datetime(event):
 
     """
     LINE event의 timestamp를 사용한다.
-
-    서버가 실제로 이벤트를 처리한 시간이 아니라
-    사용자가 메시지를 보낸 실제 시각을 기준으로 한다.
     """
 
     timestamp = event.get(
@@ -695,7 +712,6 @@ def get_today_messages(
         "%Y-%m-%d"
     )
 
-    # ★ 1000개 제한 없이 전부 가져옴
     return supabase_get_all(
         "chat_messages",
         {
@@ -718,7 +734,6 @@ def get_all_group_messages(
     group_id
 ):
 
-    # ★ 1000개 제한 없이 전부 가져옴
     return supabase_get_all(
         "chat_messages",
         {
@@ -1523,11 +1538,11 @@ Google 검색을 사용한다.
 
 
 # =========================================================
-# AI 질문 처리
+# ★ AI 질문 처리
+# Reply API용
 # =========================================================
 
-def answer_ai_question_async(
-    group_id,
+def answer_ai_question(
     prompt
 ):
 
@@ -1552,27 +1567,7 @@ def answer_ai_question_async(
             prompt
         )
 
-    push_message(
-        group_id,
-        answer
-    )
-
-
-def start_ai_question(
-    group_id,
-    prompt
-):
-
-    thread = threading.Thread(
-        target=answer_ai_question_async,
-        args=(
-            group_id,
-            prompt
-        ),
-        daemon=True
-    )
-
-    thread.start()
+    return answer
 
 
 # =========================================================
@@ -1760,6 +1755,9 @@ NO
                     group_id
                 )
 
+                # 랜덤 AI는 사용자가 직접 질문한
+                # 메시지에 대한 답변이 아니므로
+                # 기존처럼 Push API 사용
                 push_message(
                     group_id,
                     reply
@@ -1937,7 +1935,13 @@ def webhook():
             continue
 
         # =================================================
-        # AI 질문
+        # ★ AI 질문
+        # =================================================
+        # !뭐해
+        # !오늘 날씨 어때
+        # !아무 질문
+        #
+        # 이제 Push가 아니라 Reply API 사용
         # =================================================
 
         if text.startswith("!"):
@@ -1949,13 +1953,19 @@ def webhook():
             if prompt:
 
                 print(
-                    "START ASYNC AI:",
+                    "START REPLY AI:",
                     prompt
                 )
 
-                start_ai_question(
-                    group_id,
+                # Gemini가 답변을 생성한 후
+                # 같은 이벤트의 replyToken으로 답변
+                answer = answer_ai_question(
                     prompt
+                )
+
+                reply_message(
+                    reply_token,
+                    answer
                 )
 
             continue
@@ -2110,10 +2120,13 @@ def webhook():
                     )
                 )
 
-            # 랜덤 AI
-            maybe_start_random_ai(
-                group_id
-            )
+                # =================================================
+                # 랜덤 AI
+                # =================================================
+
+                maybe_start_random_ai(
+                    group_id
+                )
 
     # =====================================================
     # LINE에 즉시 200
