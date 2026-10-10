@@ -1954,6 +1954,185 @@ def blackjack_cancel(group_id, user_id):
     return "🛑 블랙잭을 종료했어. 다시 하려면 `블랙잭`을 입력해!"
 
 # =========================================================
+# 블랙잭 (유저 vs 유저)
+# 방마다 한 번에 한 개의 대결을 진행
+# =========================================================
+
+BLACKJACK_DUELS = {}       # group_id -> duel
+BLACKJACK_CHALLENGES = {}  # group_id -> pending challenge
+
+
+def blackjack_duel_board(duel, reveal_all=False):
+    lines = ["🎰 블랙잭 대결 진행 중!\n"]
+    for uid in duel["players"]:
+        name = duel["names"][uid]
+        cards = duel["cards"][uid]
+        score = blackjack_score(cards)
+        status = " (스탠드)" if uid in duel["stood"] else ""
+        lines.append(f"👤 {name}{status}\n🃏 {blackjack_cards_text(cards)}\n합계: {score}")
+    if not reveal_all:
+        current = duel["players"][duel["turn"]]
+        lines.append(f"\n➡️ {duel['names'][current]}의 차례!\n`히트` 또는 `스탠드`")
+    return "\n\n".join(lines)
+
+
+def blackjack_duel_result(duel, reason=""):
+    lines = ["🎰 블랙잭 대결 결과!\n"]
+    scores = {}
+    for uid in duel["players"]:
+        score = blackjack_score(duel["cards"][uid])
+        scores[uid] = score
+        lines.append(f"👤 {duel['names'][uid]}\n🃏 {blackjack_cards_text(duel['cards'][uid])}\n합계: {score}")
+    a, b = duel["players"]
+    sa, sb = scores[a], scores[b]
+    if sa > 21 and sb > 21:
+        result = "🤝 둘 다 버스트! 무승부!"
+    elif sa > 21:
+        result = f"🏆 {duel['names'][b]} 승리! ({sa} vs {sb})"
+    elif sb > 21:
+        result = f"🏆 {duel['names'][a]} 승리! ({sa} vs {sb})"
+    elif sa > sb:
+        result = f"🏆 {duel['names'][a]} 승리! ({sa} vs {sb})"
+    elif sb > sa:
+        result = f"🏆 {duel['names'][b]} 승리! ({sb} vs {sa})"
+    else:
+        result = f"🤝 무승부! ({sa} vs {sb})"
+    prefix = f"{reason}\n\n" if reason else ""
+    return prefix + "\n\n".join(lines) + f"\n\n{result}\n\n새 대결은 `블랙잭 상대이름`으로 신청해!"
+
+
+def blackjack_duel_advance(duel):
+    """현재 플레이어가 멈췄으면 다음 플레이어로 넘기고, 모두 멈췄으면 결과를 반환."""
+    if len(duel["stood"]) == 2:
+        return blackjack_duel_result(duel)
+    for offset in (1, 2):
+        index = (duel["turn"] + offset) % 2
+        uid = duel["players"][index]
+        if uid not in duel["stood"]:
+            duel["turn"] = index
+            return blackjack_duel_board(duel)
+    return blackjack_duel_result(duel)
+
+
+def blackjack_duel_challenge(group_id, challenger_id, challenger_name, target_name):
+    if group_id in BLACKJACK_DUELS:
+        return "이 방에서는 이미 블랙잭 대결이 진행 중이야!"
+    if group_id in BLACKJACK_CHALLENGES:
+        return "이미 수락을 기다리는 대결 신청이 있어. 먼저 수락하거나 거절해 줘."
+    target_name = target_name.strip()
+    if not target_name:
+        return "상대 이름을 입력해 줘. 예: `블랙잭 철수`"
+    if target_name == challenger_name:
+        return "자기 자신에게는 대결을 신청할 수 없어!"
+    BLACKJACK_CHALLENGES[group_id] = {
+        "challenger_id": challenger_id,
+        "challenger_name": challenger_name,
+        "target_name": target_name,
+        "created_at": time.time(),
+    }
+    return (
+        "🃏 블랙잭 대결 신청!\n\n"
+        f"{challenger_name} ⚔️ {target_name}\n\n"
+        f"{target_name}님, 수락하려면 `수락`, 거절하려면 `거절`을 입력해!"
+    )
+
+
+def blackjack_duel_accept(group_id, user_id, user_name):
+    challenge = BLACKJACK_CHALLENGES.get(group_id)
+    if not challenge:
+        return "수락할 블랙잭 대결 신청이 없어."
+    if time.time() - challenge["created_at"] > 600:
+        BLACKJACK_CHALLENGES.pop(group_id, None)
+        return "대결 신청이 만료됐어. 다시 신청해 줘!"
+    if user_id == challenge["challenger_id"]:
+        return "신청한 사람은 상대방이 수락해야 해!"
+    if user_name != challenge["target_name"]:
+        return f"{challenge['target_name']}님만 수락할 수 있어!"
+    BLACKJACK_CHALLENGES.pop(group_id, None)
+
+    deck = blackjack_new_deck()
+    a = challenge["challenger_id"]
+    b = user_id
+    duel = {
+        "players": [a, b],
+        "names": {a: challenge["challenger_name"], b: user_name},
+        "cards": {
+            a: [deck.pop(), deck.pop()],
+            b: [deck.pop(), deck.pop()],
+        },
+        "deck": deck,
+        "stood": set(),
+        "turn": 0,
+    }
+    BLACKJACK_DUELS[group_id] = duel
+    # 처음부터 21인 플레이어는 자동으로 스탠드 처리
+    for uid in duel["players"]:
+        if blackjack_score(duel["cards"][uid]) == 21:
+            duel["stood"].add(uid)
+    if len(duel["stood"]) == 2:
+        result = blackjack_duel_result(duel, "처음 받은 카드로 둘 다 21이야!")
+        BLACKJACK_DUELS.pop(group_id, None)
+        return result
+    if duel["players"][0] in duel["stood"]:
+        duel["turn"] = 1
+    return "🎰 블랙잭 대결 시작!\n\n" + blackjack_duel_board(duel)
+
+
+def blackjack_duel_decline(group_id, user_id, user_name):
+    challenge = BLACKJACK_CHALLENGES.get(group_id)
+    if not challenge:
+        return "거절할 블랙잭 대결 신청이 없어."
+    if user_id == challenge["challenger_id"] or user_name != challenge["target_name"]:
+        return f"{challenge['target_name']}님만 거절할 수 있어."
+    BLACKJACK_CHALLENGES.pop(group_id, None)
+    return f"❌ {user_name}님이 {challenge['challenger_name']}님의 블랙잭 대결을 거절했어."
+
+
+def blackjack_duel_action(group_id, user_id, action):
+    duel = BLACKJACK_DUELS.get(group_id)
+    if not duel:
+        return None
+    if user_id not in duel["players"]:
+        return "현재 대결 중인 두 사람만 히트 또는 스탠드를 할 수 있어."
+    if user_id in duel["stood"]:
+        return "너는 이미 스탠드했어. 상대방 차례를 기다려 줘."
+    current = duel["players"][duel["turn"]]
+    if user_id != current:
+        return f"아직 {duel['names'][current]}의 차례야!"
+
+    if action == "hit":
+        if not duel["deck"]:
+            duel["deck"] = blackjack_new_deck()
+        duel["cards"][user_id].append(duel["deck"].pop())
+        score = blackjack_score(duel["cards"][user_id])
+        if score > 21:
+            duel["stood"].add(user_id)
+            message = f"💥 {duel['names'][user_id]} 버스트! ({score})\n\n"
+            if len(duel["stood"]) == 2:
+                result = blackjack_duel_result(duel)
+                BLACKJACK_DUELS.pop(group_id, None)
+                return message + result
+            return message + blackjack_duel_advance(duel)
+        if score == 21:
+            duel["stood"].add(user_id)
+            message = f"🎯 {duel['names'][user_id]} 21 도달! 자동으로 스탠드했어.\n\n"
+            if len(duel["stood"]) == 2:
+                result = blackjack_duel_result(duel)
+                BLACKJACK_DUELS.pop(group_id, None)
+                return message + result
+            return message + blackjack_duel_advance(duel)
+        return f"🃏 {duel['names'][user_id]} 히트!\n합계: {score}\n\n" + blackjack_duel_board(duel)
+
+    duel["stood"].add(user_id)
+    message = f"✋ {duel['names'][user_id]} 스탠드!\n\n"
+    if len(duel["stood"]) == 2:
+        result = blackjack_duel_result(duel)
+        BLACKJACK_DUELS.pop(group_id, None)
+        return message + result
+    return message + blackjack_duel_advance(duel)
+
+
+# =========================================================
 # Webhook
 # =========================================================
 
@@ -2136,6 +2315,54 @@ def webhook():
             "",
             text
         )
+
+        # =================================================
+        # 유저 vs 유저 블랙잭 (Reply API)
+        # =================================================
+
+        # 대결 신청: "블랙잭 상대이름"
+        duel_match = re.match(r"^블랙잭\s+(.+)$", text)
+        if duel_match and normalized not in ["블랙잭종료", "종료블랙잭"]:
+            target_name = duel_match.group(1).strip()
+            reply_message(
+                reply_token,
+                blackjack_duel_challenge(
+                    group_id, user_id, user_name, target_name
+                )
+            )
+            continue
+
+        if normalized == "수락":
+            reply_message(
+                reply_token,
+                blackjack_duel_accept(group_id, user_id, user_name)
+            )
+            continue
+
+        if normalized == "거절":
+            reply_message(
+                reply_token,
+                blackjack_duel_decline(group_id, user_id, user_name)
+            )
+            continue
+
+        if normalized in ["대결취소", "블랙잭대결취소"]:
+            challenge = BLACKJACK_CHALLENGES.get(group_id)
+            if challenge and challenge["challenger_id"] == user_id:
+                BLACKJACK_CHALLENGES.pop(group_id, None)
+                reply_message(reply_token, "신청한 블랙잭 대결을 취소했어.")
+            else:
+                reply_message(reply_token, "취소할 네 대결 신청이 없어.")
+            continue
+
+        if normalized in ["히트", "카드더", "한장더", "스탠드", "스탑", "멈춤"]:
+            duel = BLACKJACK_DUELS.get(group_id)
+            if duel:
+                action = "hit" if normalized in ["히트", "카드더", "한장더"] else "stand"
+                duel_response = blackjack_duel_action(group_id, user_id, action)
+                if duel_response is not None:
+                    reply_message(reply_token, duel_response)
+                    continue
 
         # =================================================
         # 블랙잭 명령어 (Reply API만 사용)
