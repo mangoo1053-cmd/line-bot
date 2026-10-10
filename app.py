@@ -35,18 +35,19 @@ KST = ZoneInfo("Asia/Seoul")
 
 AI_TRIGGER_CHANCE = 0.03
 
-# ★ 랜덤 AI 쿨타임: 3시간 → 1시간
+# 랜덤 AI 쿨타임: 1시간
 AI_COOLDOWN_SECONDS = 1 * 60 * 60
 
 RECENT_MESSAGE_LIMIT = 12
 
-
+# 일반 AI
 NORMAL_GEMINI_MODELS = [
     "gemini-3.5-flash-lite",
     "gemini-3.5-flash",
     "gemini-3.6-flash",
 ]
 
+# 검색 AI
 SEARCH_GEMINI_MODELS = [
     "gemini-3.8-flash",
     "gemini-3.7-flash",
@@ -83,7 +84,9 @@ def verify_signature(body, signature):
         hashlib.sha256
     ).digest()
 
-    expected = base64.b64encode(digest).decode("utf-8")
+    expected = base64.b64encode(
+        digest
+    ).decode("utf-8")
 
     return hmac.compare_digest(
         expected,
@@ -96,14 +99,22 @@ def verify_signature(body, signature):
 # =========================================================
 
 def line_api(endpoint, payload):
-    url = f"https://api.line.me/v2/bot/{endpoint}"
+
+    url = (
+        f"https://api.line.me/v2/bot/"
+        f"{endpoint}"
+    )
 
     headers = {
-        "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}",
-        "Content-Type": "application/json"
+        "Authorization":
+            f"Bearer {CHANNEL_ACCESS_TOKEN}",
+
+        "Content-Type":
+            "application/json"
     }
 
     try:
+
         response = requests.post(
             url,
             headers=headers,
@@ -117,6 +128,7 @@ def line_api(endpoint, payload):
         )
 
         if response.status_code >= 400:
+
             print(
                 "LINE ERROR:",
                 response.text[:1000]
@@ -125,6 +137,7 @@ def line_api(endpoint, payload):
         return response
 
     except Exception as e:
+
         print(
             "LINE API ERROR:",
             repr(e)
@@ -134,6 +147,7 @@ def line_api(endpoint, payload):
 
 
 def reply_message(reply_token, text):
+
     if not reply_token:
         return
 
@@ -145,7 +159,9 @@ def reply_message(reply_token, text):
     line_api(
         "message/reply",
         {
-            "replyToken": reply_token,
+            "replyToken":
+                reply_token,
+
             "messages": [
                 {
                     "type": "text",
@@ -157,6 +173,7 @@ def reply_message(reply_token, text):
 
 
 def push_message(group_id, text):
+
     if not group_id:
         return
 
@@ -168,7 +185,9 @@ def push_message(group_id, text):
     line_api(
         "message/push",
         {
-            "to": group_id,
+            "to":
+                group_id,
+
             "messages": [
                 {
                     "type": "text",
@@ -183,22 +202,32 @@ def push_message(group_id, text):
 # LINE 프로필
 # =========================================================
 
-def get_profile_name(user_id, group_id=None):
+def get_profile_name(
+    user_id,
+    group_id=None
+):
+
     if not user_id:
         return "알 수 없음"
 
     headers = {
-        "Authorization": f"Bearer {CHANNEL_ACCESS_TOKEN}"
+        "Authorization":
+            f"Bearer {CHANNEL_ACCESS_TOKEN}"
     }
 
     try:
-        # 그룹 채팅에서는 그룹 멤버 프로필 API 사용
+
+        # 그룹 채팅
         if group_id:
+
             url = (
                 "https://api.line.me/v2/bot/group/"
                 f"{group_id}/member/{user_id}"
             )
+
+        # 개인 채팅
         else:
+
             url = (
                 "https://api.line.me/v2/bot/profile/"
                 f"{user_id}"
@@ -217,6 +246,7 @@ def get_profile_name(user_id, group_id=None):
         )
 
         if response.status_code == 200:
+
             data = response.json()
 
             return data.get(
@@ -225,6 +255,7 @@ def get_profile_name(user_id, group_id=None):
             )
 
     except Exception as e:
+
         print(
             "PROFILE ERROR:",
             repr(e)
@@ -233,24 +264,34 @@ def get_profile_name(user_id, group_id=None):
     return "알 수 없음"
 
 
-
 # =========================================================
 # Supabase
 # =========================================================
 
 def supabase_headers():
+
     return {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": "application/json"
+        "apikey":
+            SUPABASE_KEY,
+
+        "Authorization":
+            f"Bearer {SUPABASE_KEY}",
+
+        "Content-Type":
+            "application/json"
     }
 
 
-def supabase_get(table, params=None):
+def supabase_get(
+    table,
+    params=None
+):
+
     if not SUPABASE_URL or not SUPABASE_KEY:
         return []
 
     try:
+
         response = requests.get(
             f"{SUPABASE_URL}/rest/v1/{table}",
             headers=supabase_headers(),
@@ -259,6 +300,7 @@ def supabase_get(table, params=None):
         )
 
         if response.status_code >= 400:
+
             print(
                 "SUPABASE GET ERROR:",
                 response.status_code,
@@ -270,6 +312,7 @@ def supabase_get(table, params=None):
         return response.json()
 
     except Exception as e:
+
         print(
             "SUPABASE GET ERROR:",
             repr(e)
@@ -278,15 +321,140 @@ def supabase_get(table, params=None):
         return []
 
 
-def supabase_post(table, data):
+# =========================================================
+# ★ Supabase 전체 조회
+# 1000개 제한 방지
+# =========================================================
+
+SUPABASE_PAGE_SIZE = 1000
+
+
+def supabase_get_all(
+    table,
+    params=None
+):
+
+    """
+    Supabase REST API에서
+    1000개씩 나눠서 전체 데이터를 가져온다.
+
+    기존 데이터는 삭제하지 않는다.
+    """
+
     if not SUPABASE_URL or not SUPABASE_KEY:
-        print("SUPABASE 설정 없음")
+        return []
+
+    base_params = dict(
+        params or {}
+    )
+
+    # 기존 limit / offset 제거
+    base_params.pop(
+        "limit",
+        None
+    )
+
+    base_params.pop(
+        "offset",
+        None
+    )
+
+    all_rows = []
+
+    offset = 0
+
+    while True:
+
+        page_params = dict(
+            base_params
+        )
+
+        page_params["limit"] = str(
+            SUPABASE_PAGE_SIZE
+        )
+
+        page_params["offset"] = str(
+            offset
+        )
+
+        try:
+
+            response = requests.get(
+                f"{SUPABASE_URL}/rest/v1/{table}",
+                headers=supabase_headers(),
+                params=page_params,
+                timeout=10
+            )
+
+            if response.status_code >= 400:
+
+                print(
+                    "SUPABASE PAGINATED GET ERROR:",
+                    response.status_code,
+                    response.text[:1000]
+                )
+
+                break
+
+            rows = response.json()
+
+            if not isinstance(
+                rows,
+                list
+            ):
+                break
+
+            all_rows.extend(
+                rows
+            )
+
+            print(
+                f"SUPABASE PAGE: "
+                f"{table} "
+                f"offset={offset} "
+                f"count={len(rows)} "
+                f"total={len(all_rows)}"
+            )
+
+            # 마지막 페이지
+            if len(rows) < SUPABASE_PAGE_SIZE:
+                break
+
+            offset += SUPABASE_PAGE_SIZE
+
+        except Exception as e:
+
+            print(
+                "SUPABASE PAGINATED GET ERROR:",
+                repr(e)
+            )
+
+            break
+
+    return all_rows
+
+
+def supabase_post(
+    table,
+    data
+):
+
+    if not SUPABASE_URL or not SUPABASE_KEY:
+
+        print(
+            "SUPABASE 설정 없음"
+        )
+
         return None
 
     headers = supabase_headers()
-    headers["Prefer"] = "return=minimal"
+
+    headers["Prefer"] = (
+        "return=minimal"
+    )
 
     try:
+
         response = requests.post(
             f"{SUPABASE_URL}/rest/v1/{table}",
             headers=headers,
@@ -295,6 +463,7 @@ def supabase_post(table, data):
         )
 
         if response.status_code >= 400:
+
             print(
                 "SUPABASE POST ERROR:",
                 response.status_code,
@@ -304,6 +473,7 @@ def supabase_post(table, data):
         return response
 
     except Exception as e:
+
         print(
             "SUPABASE POST ERROR:",
             repr(e)
@@ -312,14 +482,23 @@ def supabase_post(table, data):
         return None
 
 
-def supabase_patch(table, params, data):
+def supabase_patch(
+    table,
+    params,
+    data
+):
+
     if not SUPABASE_URL or not SUPABASE_KEY:
         return None
 
     headers = supabase_headers()
-    headers["Prefer"] = "return=minimal"
+
+    headers["Prefer"] = (
+        "return=minimal"
+    )
 
     try:
+
         response = requests.patch(
             f"{SUPABASE_URL}/rest/v1/{table}",
             headers=headers,
@@ -331,6 +510,7 @@ def supabase_patch(table, params, data):
         return response
 
     except Exception as e:
+
         print(
             "SUPABASE PATCH ERROR:",
             repr(e)
@@ -339,11 +519,16 @@ def supabase_patch(table, params, data):
         return None
 
 
-def supabase_delete(table, params):
+def supabase_delete(
+    table,
+    params
+):
+
     if not SUPABASE_URL or not SUPABASE_KEY:
         return None
 
     try:
+
         response = requests.delete(
             f"{SUPABASE_URL}/rest/v1/{table}",
             headers=supabase_headers(),
@@ -352,6 +537,7 @@ def supabase_delete(table, params):
         )
 
         if response.status_code >= 400:
+
             print(
                 "SUPABASE DELETE ERROR:",
                 response.status_code,
@@ -361,6 +547,7 @@ def supabase_delete(table, params):
         return response
 
     except Exception as e:
+
         print(
             "SUPABASE DELETE ERROR:",
             repr(e)
@@ -374,6 +561,7 @@ def supabase_delete(table, params):
 # =========================================================
 
 def get_event_datetime(event):
+
     """
     LINE event의 timestamp를 사용한다.
 
@@ -381,20 +569,26 @@ def get_event_datetime(event):
     사용자가 메시지를 보낸 실제 시각을 기준으로 한다.
     """
 
-    timestamp = event.get("timestamp")
+    timestamp = event.get(
+        "timestamp"
+    )
 
     if timestamp is None:
         return now_kst()
 
     try:
+
         dt = datetime.fromtimestamp(
             int(timestamp) / 1000,
             tz=timezone.utc
         )
 
-        return dt.astimezone(KST)
+        return dt.astimezone(
+            KST
+        )
 
     except Exception as e:
+
         print(
             "EVENT TIME ERROR:",
             repr(e)
@@ -414,6 +608,7 @@ def save_chat_message(
     message,
     event_time=None
 ):
+
     if not group_id:
         return False
 
@@ -421,14 +616,26 @@ def save_chat_message(
         event_time = now_kst()
 
     data = {
-        "group_id": group_id,
-        "user_id": user_id,
-        "user_name": user_name,
-        "message": message,
-        "date_kst": event_time.strftime(
-            "%Y-%m-%d"
-        ),
-        "hour_kst": event_time.hour
+
+        "group_id":
+            group_id,
+
+        "user_id":
+            user_id,
+
+        "user_name":
+            user_name,
+
+        "message":
+            message,
+
+        "date_kst":
+            event_time.strftime(
+                "%Y-%m-%d"
+            ),
+
+        "hour_kst":
+            event_time.hour
     }
 
     response = supabase_post(
@@ -436,7 +643,10 @@ def save_chat_message(
         data
     )
 
-    if response is not None and response.status_code < 300:
+    if (
+        response is not None
+        and response.status_code < 300
+    ):
 
         print(
             "CHAT SAVED:",
@@ -461,6 +671,7 @@ def save_chat_message(
 
 
 def is_laughter_only(text):
+
     if not text:
         return False
 
@@ -476,13 +687,16 @@ def is_laughter_only(text):
 # 소통량 조회
 # =========================================================
 
-def get_today_messages(group_id):
+def get_today_messages(
+    group_id
+):
 
     today = now_kst().strftime(
         "%Y-%m-%d"
     )
 
-    return supabase_get(
+    # ★ 1000개 제한 없이 전부 가져옴
+    return supabase_get_all(
         "chat_messages",
         {
             "group_id":
@@ -500,9 +714,12 @@ def get_today_messages(group_id):
     )
 
 
-def get_all_group_messages(group_id):
+def get_all_group_messages(
+    group_id
+):
 
-    return supabase_get(
+    # ★ 1000개 제한 없이 전부 가져옴
+    return supabase_get_all(
         "chat_messages",
         {
             "group_id":
@@ -521,7 +738,9 @@ def get_all_group_messages(group_id):
 # 단라 소통량
 # =========================================================
 
-def today_ranking(group_id):
+def today_ranking(
+    group_id
+):
 
     rows = get_today_messages(
         group_id
@@ -545,7 +764,10 @@ def today_ranking(group_id):
             continue
 
         counts[user_id] = (
-            counts.get(user_id, 0) + 1
+            counts.get(
+                user_id,
+                0
+            ) + 1
         )
 
         names[user_id] = name
@@ -564,14 +786,19 @@ def today_ranking(group_id):
     return ranking, names
 
 
-def make_ranking_text(group_id):
+def make_ranking_text(
+    group_id
+):
 
     ranking, names = today_ranking(
         group_id
     )
 
     if not ranking:
-        return "오늘은 아직 소통량이 없어!"
+
+        return (
+            "오늘은 아직 소통량이 없어!"
+        )
 
     result = (
         "🏆 오늘 단라 소통량 순위\n\n"
@@ -634,7 +861,9 @@ def make_my_count_text(
 # 방 통계
 # =========================================================
 
-def make_room_stats(group_id):
+def make_room_stats(
+    group_id
+):
 
     rows = get_all_group_messages(
         group_id
@@ -656,13 +885,16 @@ def make_room_stats(group_id):
         )
 
         if user_id:
-            users.add(user_id)
+            users.add(
+                user_id
+            )
 
         date = row.get(
             "date_kst"
         )
 
         if date:
+
             day_counts[date] = (
                 day_counts.get(
                     date,
@@ -800,7 +1032,9 @@ def make_my_stats(
 # 소통량 초기화
 # =========================================================
 
-def reset_today(group_id):
+def reset_today(
+    group_id
+):
 
     today = now_kst().strftime(
         "%Y-%m-%d"
@@ -821,6 +1055,7 @@ def reset_today(group_id):
         response is not None
         and response.status_code < 300
     ):
+
         return True
 
     return False
@@ -879,20 +1114,33 @@ def make_name_format(text):
 
     gender_map = {
 
-        "여자": "📡",
-        "여": "📡",
+        "여자":
+            "📡",
 
-        "남자": "🔭",
-        "남": "🔭"
+        "여":
+            "📡",
+
+        "남자":
+            "🔭",
+
+        "남":
+            "🔭"
 
     }
 
     kind_map = {
 
-        "돔": "𝒅",
-        "섭": "𝒔",
-        "스위치": "𝒔/𝒅",
-        "바닐라": "𝒗"
+        "돔":
+            "𝒅",
+
+        "섭":
+            "𝒔",
+
+        "스위치":
+            "𝒔/𝒅",
+
+        "바닐라":
+            "𝒗"
 
     }
 
@@ -918,7 +1166,9 @@ def make_name_format(text):
 # 최근 대화
 # =========================================================
 
-def get_recent_messages(group_id):
+def get_recent_messages(
+    group_id
+):
 
     rows = supabase_get(
         "chat_messages",
@@ -933,7 +1183,9 @@ def get_recent_messages(group_id):
                 "created_at.desc",
 
             "limit":
-                str(RECENT_MESSAGE_LIMIT)
+                str(
+                    RECENT_MESSAGE_LIMIT
+                )
         }
     )
 
@@ -948,7 +1200,9 @@ def get_recent_messages(group_id):
             f"{row.get('message', '')}"
         )
 
-    return "\n".join(result)
+    return "\n".join(
+        result
+    )
 
 
 # =========================================================
@@ -1023,7 +1277,8 @@ def gemini_request(
         )
 
         elapsed = (
-            time.time() - started
+            time.time()
+            - started
         )
 
         print(
@@ -1062,6 +1317,7 @@ def gemini_request(
         for part in parts:
 
             if "text" in part:
+
                 texts.append(
                     part["text"]
                 )
@@ -1158,7 +1414,9 @@ REALTIME_KEYWORDS = [
 ]
 
 
-def needs_realtime_search(prompt):
+def needs_realtime_search(
+    prompt
+):
 
     text = prompt.lower()
 
@@ -1172,7 +1430,9 @@ def needs_realtime_search(prompt):
 # 일반 AI
 # =========================================================
 
-def ask_normal_gemini(prompt):
+def ask_normal_gemini(
+    prompt
+):
 
     system = """
 너는 한국 단체 채팅방의 자연스러운 AI 친구다.
@@ -1219,7 +1479,9 @@ def ask_normal_gemini(prompt):
 # 검색 AI
 # =========================================================
 
-def ask_search_gemini(prompt):
+def ask_search_gemini(
+    prompt
+):
 
     system = """
 너는 한국 단체 채팅방의 AI 친구다.
@@ -1269,15 +1531,16 @@ def answer_ai_question_async(
     prompt
 ):
 
-    print(
-        f"AI QUESTION: {prompt} | "
-        f"realtime: "
-        f"{needs_realtime_search(prompt)}"
+    realtime = needs_realtime_search(
+        prompt
     )
 
-    if needs_realtime_search(
-        prompt
-    ):
+    print(
+        f"AI QUESTION: {prompt} | "
+        f"realtime: {realtime}"
+    )
+
+    if realtime:
 
         answer = ask_search_gemini(
             prompt
@@ -1316,7 +1579,9 @@ def start_ai_question(
 # 랜덤 AI
 # =========================================================
 
-def get_last_ai_reply(group_id):
+def get_last_ai_reply(
+    group_id
+):
 
     rows = supabase_get(
         "bot_state",
@@ -1356,7 +1621,9 @@ def get_last_ai_reply(group_id):
         return None
 
 
-def can_random_ai_reply(group_id):
+def can_random_ai_reply(
+    group_id
+):
 
     last = get_last_ai_reply(
         group_id
@@ -1366,17 +1633,22 @@ def can_random_ai_reply(group_id):
         return True
 
     elapsed = (
-        datetime.now(timezone.utc)
+        datetime.now(
+            timezone.utc
+        )
         - last
     ).total_seconds()
 
     return (
-        elapsed >=
+        elapsed
+        >=
         AI_COOLDOWN_SECONDS
     )
 
 
-def save_last_ai_reply(group_id):
+def save_last_ai_reply(
+    group_id
+):
 
     existing = supabase_get(
         "bot_state",
@@ -1421,7 +1693,9 @@ def save_last_ai_reply(group_id):
         )
 
 
-def ask_random_ai(group_id):
+def ask_random_ai(
+    group_id
+):
 
     recent = get_recent_messages(
         group_id
@@ -1476,7 +1750,9 @@ NO
             "YES|"
         ):
 
-            reply = answer[4:].strip()
+            reply = answer[
+                4:
+            ].strip()
 
             if reply:
 
@@ -1504,12 +1780,18 @@ def maybe_start_random_ai(
     ):
         return
 
-    if random.random() > AI_TRIGGER_CHANCE:
+    if (
+        random.random()
+        >
+        AI_TRIGGER_CHANCE
+    ):
         return
 
     thread = threading.Thread(
         target=ask_random_ai,
-        args=(group_id,),
+        args=(
+            group_id,
+        ),
         daemon=True
     )
 
@@ -1526,7 +1808,10 @@ def maybe_start_random_ai(
 )
 def home():
 
-    return "LINE BOT OK", 200
+    return (
+        "LINE BOT OK",
+        200
+    )
 
 
 @app.route(
@@ -1657,7 +1942,9 @@ def webhook():
 
         if text.startswith("!"):
 
-            prompt = text[1:].strip()
+            prompt = text[
+                1:
+            ].strip()
 
             if prompt:
 
@@ -1832,7 +2119,10 @@ def webhook():
     # LINE에 즉시 200
     # =====================================================
 
-    return "OK", 200
+    return (
+        "OK",
+        200
+    )
 
 
 # =========================================================
