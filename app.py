@@ -1689,7 +1689,8 @@ def save_last_ai_reply(
 
 
 def ask_random_ai(
-    group_id
+    group_id,
+    reply_token
 ):
 
     recent = get_recent_messages(
@@ -1755,11 +1756,11 @@ NO
                     group_id
                 )
 
-                # 랜덤 AI는 사용자가 직접 질문한
-                # 메시지에 대한 답변이 아니므로
-                # 기존처럼 Push API 사용
-                push_message(
-                    group_id,
+                # 랜덤 AI도 Push가 아니라
+                # 이번 사용자의 메시지에 발급된 replyToken으로 답변
+                # 따라서 LINE 월간 Push 한도를 사용하지 않음
+                reply_message(
+                    reply_token,
                     reply
                 )
 
@@ -1767,7 +1768,8 @@ NO
 
 
 def maybe_start_random_ai(
-    group_id
+    group_id,
+    reply_token
 ):
 
     if not group_id:
@@ -1789,6 +1791,7 @@ def maybe_start_random_ai(
         target=ask_random_ai,
         args=(
             group_id,
+            reply_token,
         ),
         daemon=True
     )
@@ -2125,7 +2128,8 @@ def webhook():
                 # =================================================
 
                 maybe_start_random_ai(
-                    group_id
+                    group_id,
+                    reply_token
                 )
 
     # =====================================================
