@@ -447,6 +447,33 @@ def get_group_members(group_id):
 
 
 # =========================================================
+# ★ 이름으로 실제 LINE user_id 찾기
+# =========================================================
+
+def find_group_member_id_by_name(
+    group_id,
+    target_name
+):
+
+    target_name = target_name.strip()
+
+    if not target_name:
+        return None
+
+    members = get_group_members(
+        group_id
+    )
+
+    # 완전히 같은 이름 우선
+    for user_id, name in members.items():
+
+        if name == target_name:
+            return user_id
+
+    return None
+
+
+# =========================================================
 # Supabase
 # =========================================================
 
@@ -2378,6 +2405,10 @@ def blackjack_duel_advance(duel):
     )
 
 
+# =========================================================
+# ★ 유저 vs 유저 대결 신청
+# =========================================================
+
 def blackjack_duel_challenge(
     group_id,
     challenger_id,
@@ -2408,12 +2439,45 @@ def blackjack_duel_challenge(
             "예: `블랙잭 철수`"
         )
 
-    if target_name == challenger_name:
+    # =====================================================
+    # ★ 이름 → 실제 LINE user_id 찾기
+    # =====================================================
+
+    target_id = find_group_member_id_by_name(
+        group_id,
+        target_name
+    )
+
+    if not target_id:
+
+        return (
+            f"❌ `{target_name}`이라는 이름의 "
+            "현재 방 멤버를 찾지 못했어.\n\n"
+            "LINE에 표시되는 이름을 "
+            "정확하게 입력해 줘."
+        )
+
+    if target_id == challenger_id:
 
         return (
             "자기 자신에게는 "
             "대결을 신청할 수 없어!"
         )
+
+    # =====================================================
+    # ★ 실제 LINE 이름 사용
+    # =====================================================
+
+    actual_target_name = get_profile_name(
+        target_id,
+        group_id
+    )
+
+    if (
+        not actual_target_name
+        or actual_target_name == "알 수 없음"
+    ):
+        actual_target_name = target_name
 
     BLACKJACK_CHALLENGES[group_id] = {
         "challenger_id":
@@ -2422,8 +2486,11 @@ def blackjack_duel_challenge(
         "challenger_name":
             challenger_name,
 
+        "target_id":
+            target_id,
+
         "target_name":
-            target_name,
+            actual_target_name,
 
         "created_at":
             time.time()
@@ -2433,13 +2500,17 @@ def blackjack_duel_challenge(
         "🃏 블랙잭 대결 신청!\n\n"
 
         f"{challenger_name} ⚔️ "
-        f"{target_name}\n\n"
+        f"{actual_target_name}\n\n"
 
-        f"{target_name}님, "
+        f"{actual_target_name}님, "
         "수락하려면 `수락`, "
         "거절하려면 `거절`을 입력해!"
     )
 
+
+# =========================================================
+# ★ 유저 vs 유저 수락
+# =========================================================
 
 def blackjack_duel_accept(
     group_id,
@@ -2458,6 +2529,7 @@ def blackjack_duel_accept(
             "대결 신청이 없어."
         )
 
+    # 10분 지나면 자동 만료
     if (
         time.time()
         - challenge["created_at"]
@@ -2474,6 +2546,7 @@ def blackjack_duel_accept(
             "다시 신청해 줘!"
         )
 
+    # 신청자 본인은 수락할 수 없음
     if (
         user_id
         == challenge["challenger_id"]
@@ -2484,12 +2557,39 @@ def blackjack_duel_accept(
             "상대방이 수락해야 해!"
         )
 
-    if user_name != challenge["target_name"]:
+    # =====================================================
+    # ★ 핵심 수정
+    #
+    # 기존:
+    # user_name != target_name
+    #
+    # 수정:
+    # user_id != target_id
+    # =====================================================
 
-        return (
-            f"{challenge['target_name']}님만 "
-            "수락할 수 있어!"
-        )
+    target_id = challenge.get(
+        "target_id"
+    )
+
+    if target_id:
+
+        if user_id != target_id:
+
+            return (
+                f"{challenge['target_name']}님만 "
+                "수락할 수 있어!"
+            )
+
+    else:
+
+        # 혹시 예전 형식으로 만들어진
+        # 대결 신청이 남아 있는 경우의 안전장치
+        if user_name != challenge["target_name"]:
+
+            return (
+                f"{challenge['target_name']}님만 "
+                "수락할 수 있어!"
+            )
 
     BLACKJACK_CHALLENGES.pop(
         group_id,
@@ -2573,6 +2673,10 @@ def blackjack_duel_accept(
     )
 
 
+# =========================================================
+# ★ 유저 vs 유저 거절
+# =========================================================
+
 def blackjack_duel_decline(
     group_id,
     user_id,
@@ -2590,18 +2694,35 @@ def blackjack_duel_decline(
             "대결 신청이 없어."
         )
 
-    if (
-        user_id
-        == challenge["challenger_id"]
-        or
-        user_name
-        != challenge["target_name"]
-    ):
+    target_id = challenge.get(
+        "target_id"
+    )
 
-        return (
-            f"{challenge['target_name']}님만 "
-            "거절할 수 있어."
-        )
+    # 새 방식: 실제 LINE user_id 비교
+    if target_id:
+
+        if user_id != target_id:
+
+            return (
+                f"{challenge['target_name']}님만 "
+                "거절할 수 있어."
+            )
+
+    # 구버전 데이터 안전장치
+    else:
+
+        if (
+            user_id
+            == challenge["challenger_id"]
+            or
+            user_name
+            != challenge["target_name"]
+        ):
+
+            return (
+                f"{challenge['target_name']}님만 "
+                "거절할 수 있어."
+            )
 
     BLACKJACK_CHALLENGES.pop(
         group_id,
@@ -3075,12 +3196,11 @@ def webhook():
                 continue
 
         # =================================================
-        # ★ 블랙잭 종료
+        # 블랙잭 종료
         #
-        # 우선순위:
-        # 1. 대기 중인 사람 vs 사람 신청 취소
-        # 2. 진행 중인 사람 vs 사람 대결 종료
-        # 3. 일반 1인 블랙잭 종료
+        # 1. 대기 중인 사람 vs 사람 신청
+        # 2. 진행 중인 사람 vs 사람 대결
+        # 3. 1인 블랙잭
         # =================================================
 
         if normalized in [
@@ -3089,7 +3209,7 @@ def webhook():
         ]:
 
             # ---------------------------------------------
-            # 1. 아직 상대가 수락/거절하지 않은 상태
+            # 1. 대기 중인 대결 신청
             # ---------------------------------------------
 
             challenge = (
@@ -3125,7 +3245,7 @@ def webhook():
                 continue
 
             # ---------------------------------------------
-            # 2. 이미 사람 vs 사람 대결 중
+            # 2. 진행 중인 사람 vs 사람 대결
             # ---------------------------------------------
 
             duel = BLACKJACK_DUELS.get(
@@ -3156,7 +3276,7 @@ def webhook():
                 continue
 
             # ---------------------------------------------
-            # 3. 일반 1인 블랙잭
+            # 3. 1인 블랙잭
             # ---------------------------------------------
 
             reply_message(
