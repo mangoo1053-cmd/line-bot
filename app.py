@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 app = Flask(__name__)
 
+
 # =========================================================
 # 환경변수
 # =========================================================
@@ -21,10 +22,18 @@ app = Flask(__name__)
 CHANNEL_ACCESS_TOKEN = os.environ.get("CHANNEL_ACCESS_TOKEN")
 CHANNEL_SECRET = os.environ.get("CHANNEL_SECRET")
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+SUPABASE_URL = os.environ.get(
+    "SUPABASE_URL",
+    ""
+).rstrip("/")
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+SUPABASE_KEY = os.environ.get(
+    "SUPABASE_KEY"
+)
+
+GEMINI_API_KEY = os.environ.get(
+    "GEMINI_API_KEY"
+)
 
 
 # =========================================================
@@ -36,7 +45,8 @@ KST = ZoneInfo("Asia/Seoul")
 # 랜덤 AI 개입 확률
 AI_TRIGGER_CHANCE = 0.03
 
-# 랜덤 AI 쿨타임: 1시간
+# 랜덤 AI 쿨타임
+# 1시간
 AI_COOLDOWN_SECONDS = 1 * 60 * 60
 
 # 최근 대화 개수
@@ -47,14 +57,12 @@ RECENT_MESSAGE_LIMIT = 12
 # Gemini 모델
 # =========================================================
 
-# 일반 AI
 NORMAL_GEMINI_MODELS = [
     "gemini-3.5-flash-lite",
     "gemini-3.5-flash",
     "gemini-3.6-flash",
 ]
 
-# 검색 AI
 SEARCH_GEMINI_MODELS = [
     "gemini-3.8-flash",
     "gemini-3.7-flash",
@@ -74,14 +82,19 @@ def now_kst():
 
 
 def now_utc_iso():
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(
+        timezone.utc
+    ).isoformat()
 
 
 # =========================================================
 # LINE 서명 확인
 # =========================================================
 
-def verify_signature(body, signature):
+def verify_signature(
+    body,
+    signature
+):
 
     if not CHANNEL_SECRET:
         return False
@@ -106,11 +119,14 @@ def verify_signature(body, signature):
 # LINE API
 # =========================================================
 
-def line_api(endpoint, payload):
+def line_api(
+    endpoint,
+    payload
+):
 
     url = (
-        f"https://api.line.me/v2/bot/"
-        f"{endpoint}"
+        "https://api.line.me/v2/bot/"
+        + endpoint
     )
 
     headers = {
@@ -155,13 +171,72 @@ def line_api(endpoint, payload):
 
 
 # =========================================================
+# LINE GET API
+# =========================================================
+
+def line_get(
+    endpoint,
+    params=None
+):
+
+    url = (
+        "https://api.line.me/v2/bot/"
+        + endpoint
+    )
+
+    headers = {
+        "Authorization":
+            f"Bearer {CHANNEL_ACCESS_TOKEN}"
+    }
+
+    try:
+
+        response = requests.get(
+            url,
+            headers=headers,
+            params=params or {},
+            timeout=8
+        )
+
+        print(
+            f"LINE GET: {endpoint} "
+            f"{response.status_code}"
+        )
+
+        if response.status_code >= 400:
+
+            print(
+                "LINE GET ERROR:",
+                response.text[:1000]
+            )
+
+        return response
+
+    except Exception as e:
+
+        print(
+            "LINE GET ERROR:",
+            repr(e)
+        )
+
+        return None
+
+
+# =========================================================
 # Reply API
 # =========================================================
 
-def reply_message(reply_token, text):
+def reply_message(
+    reply_token,
+    text
+):
 
     if not reply_token:
-        print("REPLY ERROR: replyToken 없음")
+
+        print(
+            "REPLY ERROR: replyToken 없음"
+        )
+
         return
 
     text = str(text)
@@ -185,6 +260,7 @@ def reply_message(reply_token, text):
     )
 
     if response is not None:
+
         print(
             "REPLY MESSAGE STATUS:",
             response.status_code
@@ -193,10 +269,12 @@ def reply_message(reply_token, text):
 
 # =========================================================
 # Push API
-# 랜덤 AI에서 사용
 # =========================================================
 
-def push_message(group_id, text):
+def push_message(
+    group_id,
+    text
+):
 
     if not group_id:
         return
@@ -226,6 +304,11 @@ def push_message(group_id, text):
 # LINE 프로필
 # =========================================================
 
+PROFILE_CACHE = {}
+
+PROFILE_CACHE_SECONDS = 600
+
+
 def get_profile_name(
     user_id,
     group_id=None
@@ -234,6 +317,34 @@ def get_profile_name(
     if not user_id:
         return "알 수 없음"
 
+    cache_key = (
+        group_id,
+        user_id
+    )
+
+    cached = PROFILE_CACHE.get(
+        cache_key
+    )
+
+    if cached:
+
+        cached_name = cached.get(
+            "name"
+        )
+
+        cached_time = cached.get(
+            "time",
+            0
+        )
+
+        if (
+            time.time()
+            - cached_time
+            < PROFILE_CACHE_SECONDS
+        ):
+
+            return cached_name
+
     headers = {
         "Authorization":
             f"Bearer {CHANNEL_ACCESS_TOKEN}"
@@ -241,7 +352,6 @@ def get_profile_name(
 
     try:
 
-        # 그룹 채팅
         if group_id:
 
             url = (
@@ -249,7 +359,6 @@ def get_profile_name(
                 f"{group_id}/member/{user_id}"
             )
 
-        # 개인 채팅
         else:
 
             url = (
@@ -265,18 +374,26 @@ def get_profile_name(
 
         print(
             "PROFILE API:",
-            response.status_code,
-            response.text[:500]
+            response.status_code
         )
 
         if response.status_code == 200:
 
             data = response.json()
 
-            return data.get(
+            name = data.get(
                 "displayName",
                 "알 수 없음"
             )
+
+            PROFILE_CACHE[
+                cache_key
+            ] = {
+                "name": name,
+                "time": time.time()
+            }
+
+            return name
 
     except Exception as e:
 
@@ -286,6 +403,97 @@ def get_profile_name(
         )
 
     return "알 수 없음"
+
+
+# =========================================================
+# 현재 그룹 멤버 가져오기
+# =========================================================
+
+def get_group_member_ids(
+    group_id
+):
+
+    if not group_id:
+        return []
+
+    member_ids = []
+
+    start = None
+
+    while True:
+
+        params = {}
+
+        if start:
+            params["start"] = start
+
+        response = line_get(
+            f"group/{group_id}/members/ids",
+            params
+        )
+
+        if (
+            response is None
+            or response.status_code != 200
+        ):
+            print(
+                "GROUP MEMBER LIST ERROR"
+            )
+            break
+
+        try:
+
+            data = response.json()
+
+        except Exception:
+
+            break
+
+        ids = data.get(
+            "memberIds",
+            []
+        )
+
+        member_ids.extend(
+            ids
+        )
+
+        if not data.get(
+            "hasNext",
+            False
+        ):
+            break
+
+        start = data.get(
+            "next"
+        )
+
+        if not start:
+            break
+
+    return member_ids
+
+
+def get_group_members(
+    group_id
+):
+
+    member_ids = get_group_member_ids(
+        group_id
+    )
+
+    members = {}
+
+    for user_id in member_ids:
+
+        name = get_profile_name(
+            user_id,
+            group_id
+        )
+
+        members[user_id] = name
+
+    return members
 
 
 # =========================================================
@@ -311,7 +519,10 @@ def supabase_get(
     params=None
 ):
 
-    if not SUPABASE_URL or not SUPABASE_KEY:
+    if (
+        not SUPABASE_URL
+        or not SUPABASE_KEY
+    ):
         return []
 
     try:
@@ -346,7 +557,7 @@ def supabase_get(
 
 
 # =========================================================
-# ★ Supabase 전체 조회
+# Supabase 전체 조회
 # 1000개 제한 방지
 # =========================================================
 
@@ -358,12 +569,10 @@ def supabase_get_all(
     params=None
 ):
 
-    """
-    Supabase REST API에서
-    1000개씩 나눠서 전체 데이터를 가져온다.
-    """
-
-    if not SUPABASE_URL or not SUPABASE_KEY:
+    if (
+        not SUPABASE_URL
+        or not SUPABASE_KEY
+    ):
         return []
 
     base_params = dict(
@@ -430,8 +639,7 @@ def supabase_get_all(
             )
 
             print(
-                f"SUPABASE PAGE: "
-                f"{table} "
+                f"SUPABASE PAGE: {table} "
                 f"offset={offset} "
                 f"count={len(rows)} "
                 f"total={len(all_rows)}"
@@ -459,7 +667,10 @@ def supabase_post(
     data
 ):
 
-    if not SUPABASE_URL or not SUPABASE_KEY:
+    if (
+        not SUPABASE_URL
+        or not SUPABASE_KEY
+    ):
 
         print(
             "SUPABASE 설정 없음"
@@ -508,7 +719,10 @@ def supabase_patch(
     data
 ):
 
-    if not SUPABASE_URL or not SUPABASE_KEY:
+    if (
+        not SUPABASE_URL
+        or not SUPABASE_KEY
+    ):
         return None
 
     headers = supabase_headers()
@@ -544,7 +758,10 @@ def supabase_delete(
     params
 ):
 
-    if not SUPABASE_URL or not SUPABASE_KEY:
+    if (
+        not SUPABASE_URL
+        or not SUPABASE_KEY
+    ):
         return None
 
     try:
@@ -577,14 +794,12 @@ def supabase_delete(
 
 
 # =========================================================
-# LINE 실제 메시지 시각 → 한국 날짜
+# LINE 실제 메시지 시간
 # =========================================================
 
-def get_event_datetime(event):
-
-    """
-    LINE event의 timestamp를 사용한다.
-    """
+def get_event_datetime(
+    event
+):
 
     timestamp = event.get(
         "timestamp"
@@ -678,16 +893,15 @@ def save_chat_message(
 
     print(
         "CHAT SAVE FAILED:",
-        event_time.strftime(
-            "%Y-%m-%d %H:%M:%S"
-        ),
         user_name
     )
 
     return False
 
 
-def is_laughter_only(text):
+def is_laughter_only(
+    text
+):
 
     if not text:
         return False
@@ -750,7 +964,8 @@ def get_all_group_messages(
 
 
 # =========================================================
-# 단라 소통량
+# ★ 오늘 소통량
+# 0개인 현재 멤버도 포함
 # =========================================================
 
 def today_ranking(
@@ -764,28 +979,47 @@ def today_ranking(
     counts = {}
     names = {}
 
+    # -----------------------------------------
+    # 현재 그룹 멤버 먼저 등록
+    # -----------------------------------------
+
+    current_members = get_group_members(
+        group_id
+    )
+
+    for user_id, name in current_members.items():
+
+        counts[user_id] = 0
+
+        names[user_id] = name
+
+    # -----------------------------------------
+    # 오늘 메시지 집계
+    # -----------------------------------------
+
     for row in rows:
 
         user_id = row.get(
             "user_id"
         )
 
+        if not user_id:
+            continue
+
         name = row.get(
             "user_name",
             "알 수 없음"
         )
 
-        if not user_id:
-            continue
+        if user_id not in names:
 
-        counts[user_id] = (
-            counts.get(
-                user_id,
-                0
-            ) + 1
-        )
+            names[user_id] = name
 
-        names[user_id] = name
+        if user_id not in counts:
+
+            counts[user_id] = 0
+
+        counts[user_id] += 1
 
     ranking = sorted(
         counts.items(),
@@ -812,7 +1046,7 @@ def make_ranking_text(
     if not ranking:
 
         return (
-            "오늘은 아직 소통량이 없어!"
+            "현재 그룹 멤버를 가져오지 못했어."
         )
 
     result = (
@@ -823,7 +1057,7 @@ def make_ranking_text(
         user_id,
         count
     ) in enumerate(
-        ranking[:20],
+        ranking,
         start=1
     ):
 
@@ -832,11 +1066,21 @@ def make_ranking_text(
             "알 수 없음"
         )
 
-        result += (
-            f"{index}위 "
-            f"{name} — "
+        line = (
+            f"{index}위 {name} — "
             f"{count}개\n"
         )
+
+        # LINE 메시지 길이 방어
+        if len(result) + len(line) > 4700:
+
+            result += (
+                "\n※ 인원이 많아 나머지는 생략했어."
+            )
+
+            break
+
+        result += line
 
     return result.strip()
 
@@ -866,8 +1110,7 @@ def make_my_count_text(
             count += 1
 
     return (
-        f"💬 {user_name}님의 "
-        f"오늘 소통량\n"
+        f"💬 {user_name}님의 오늘 소통량\n"
         f"{count}개"
     )
 
@@ -900,6 +1143,7 @@ def make_room_stats(
         )
 
         if user_id:
+
             users.add(
                 user_id
             )
@@ -1066,14 +1310,10 @@ def reset_today(
         }
     )
 
-    if (
+    return (
         response is not None
         and response.status_code < 300
-    ):
-
-        return True
-
-    return False
+    )
 
 
 # =========================================================
@@ -1096,7 +1336,9 @@ SUPERSCRIPT_MAP = {
 }
 
 
-def superscript_age(age):
+def superscript_age(
+    age
+):
 
     age = str(age).zfill(2)
 
@@ -1109,7 +1351,9 @@ def superscript_age(age):
     )
 
 
-def make_name_format(text):
+def make_name_format(
+    text
+):
 
     parts = text.strip().split()
 
@@ -1221,7 +1465,7 @@ def get_recent_messages(
 
 
 # =========================================================
-# Gemini
+# Gemini 요청
 # =========================================================
 
 def gemini_request(
@@ -1358,7 +1602,7 @@ def gemini_request(
 
 
 # =========================================================
-# 실시간 질문 판별
+# 실시간 검색 여부
 # =========================================================
 
 REALTIME_KEYWORDS = [
@@ -1462,8 +1706,8 @@ def ask_normal_gemini(
 - 모르면 모른다고 말한다.
 - 없는 사실을 만들어내지 않는다.
 - 정치, 종교, 성적인 내용, 개인정보,
-  싸움이나 심각한 문제는 불필요하게 끼어들지 않는다.
-- 이 요청은 일반 질문이므로 인터넷 검색을 하지 않는다.
+  싸움이나 심각한 문제에는 불필요하게 끼어들지 않는다.
+- 일반 질문에서는 인터넷 검색을 하지 않는다.
 """
 
     full_prompt = (
@@ -1538,8 +1782,7 @@ Google 검색을 사용한다.
 
 
 # =========================================================
-# ★ AI 질문 처리
-# Reply API용
+# AI 질문 처리
 # =========================================================
 
 def answer_ai_question(
@@ -1557,17 +1800,13 @@ def answer_ai_question(
 
     if realtime:
 
-        answer = ask_search_gemini(
+        return ask_search_gemini(
             prompt
         )
 
-    else:
-
-        answer = ask_normal_gemini(
-            prompt
-        )
-
-    return answer
+    return ask_normal_gemini(
+        prompt
+    )
 
 
 # =========================================================
@@ -1666,7 +1905,6 @@ def save_last_ai_reply(
 
         "last_ai_reply":
             now_utc_iso()
-
     }
 
     if existing:
@@ -1756,9 +1994,6 @@ NO
                     group_id
                 )
 
-                # 랜덤 AI도 Push가 아니라
-                # 이번 사용자의 메시지에 발급된 replyToken으로 답변
-                # 따라서 LINE 월간 Push 한도를 사용하지 않음
                 reply_message(
                     reply_token,
                     reply
@@ -1791,7 +2026,7 @@ def maybe_start_random_ai(
         target=ask_random_ai,
         args=(
             group_id,
-            reply_token,
+            reply_token
         ),
         daemon=True
     )
@@ -1799,337 +2034,1130 @@ def maybe_start_random_ai(
     thread.start()
 
 
-
 # =========================================================
-# 블랙잭 (사용자 vs 봇)
-# 방 + 사용자별로 게임을 분리해 동시에 플레이 가능
+# 블랙잭 공통
 # =========================================================
 
-BLACKJACK_GAMES = {}
-BLACKJACK_SUITS = ["♠️", "♥️", "♦️", "♣️"]
-BLACKJACK_RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
+BLACKJACK_SUITS = [
+    "♠️",
+    "♥️",
+    "♦️",
+    "♣️"
+]
+
+BLACKJACK_RANKS = [
+    "A",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "10",
+    "J",
+    "Q",
+    "K"
+]
 
 
 def blackjack_new_deck():
-    deck = [(rank, suit) for suit in BLACKJACK_SUITS for rank in BLACKJACK_RANKS]
+
+    deck = [
+        (rank, suit)
+        for suit in BLACKJACK_SUITS
+        for rank in BLACKJACK_RANKS
+    ]
+
     random.shuffle(deck)
+
     return deck
 
 
-def blackjack_card_value(rank):
+def blackjack_card_value(
+    rank
+):
+
     if rank == "A":
         return 11
-    if rank in ("J", "Q", "K"):
+
+    if rank in (
+        "J",
+        "Q",
+        "K"
+    ):
         return 10
+
     return int(rank)
 
 
-def blackjack_score(cards):
-    score = sum(blackjack_card_value(rank) for rank, _ in cards)
-    aces = sum(1 for rank, _ in cards if rank == "A")
-    while score > 21 and aces:
+def blackjack_score(
+    cards
+):
+
+    if not cards:
+        return 0
+
+    score = sum(
+        blackjack_card_value(rank)
+        for rank, _ in cards
+    )
+
+    aces = sum(
+        1
+        for rank, _ in cards
+        if rank == "A"
+    )
+
+    while (
+        score > 21
+        and aces
+    ):
+
         score -= 10
         aces -= 1
+
     return score
 
 
-def blackjack_cards_text(cards):
-    return "  ".join(f"{rank}{suit}" for rank, suit in cards)
+# =========================================================
+# ★ 블랙잭 점수 표시
+# A 때문에 점수가 낮아지는 경우 표시
+# =========================================================
+
+def blackjack_score_text(
+    cards
+):
+
+    if not cards:
+        return "카드 없음"
+
+    score = blackjack_score(
+        cards
+    )
+
+    raw_score = sum(
+        blackjack_card_value(rank)
+        for rank, _ in cards
+    )
+
+    aces = sum(
+        1
+        for rank, _ in cards
+        if rank == "A"
+    )
+
+    if (
+        aces > 0
+        and raw_score > 21
+        and score != raw_score
+    ):
+
+        return (
+            f"{score} "
+            f"(A=1 적용)"
+        )
+
+    return str(score)
 
 
-def blackjack_dealer_text(cards, hide_second=False):
-    if hide_second and len(cards) >= 2:
-        visible = blackjack_cards_text(cards[:1]) + "  🂠"
-        return f"🤖 딜러\n🃏 {visible}\n합계: ?"
-    return f"🤖 딜러\n🃏 {blackjack_cards_text(cards)}\n합계: {blackjack_score(cards)}"
+def blackjack_cards_text(
+    cards
+):
 
+    if not cards:
+        return "카드 없음"
 
-def blackjack_finish_text(player_name, game, reason=""):
-    player_score = blackjack_score(game["player_cards"])
-    dealer_score = blackjack_score(game["dealer_cards"])
-
-    if player_score > 21:
-        result = "💥 버스트! 네가 21을 넘어서 패배했어."
-    elif dealer_score > 21:
-        result = "🎉 딜러가 버스트했어! 네 승리!"
-    elif player_score > dealer_score:
-        result = "🎉 네 승리!"
-    elif player_score < dealer_score:
-        result = "😢 딜러 승리!"
-    else:
-        result = "🤝 무승부!"
-
-    prefix = f"{reason}\n" if reason else ""
-    return (
-        f"{prefix}🎰 블랙잭 결과\n\n"
-        f"👤 {player_name}\n🃏 {blackjack_cards_text(game['player_cards'])}\n합계: {player_score}\n\n"
-        f"{blackjack_dealer_text(game['dealer_cards'])}\n\n"
-        f"{result}\n\n새 게임은 `블랙잭`을 입력해!"
+    return "  ".join(
+        f"{rank}{suit}"
+        for rank, suit in cards
     )
 
 
-def blackjack_start(group_id, user_id, user_name):
-    key = (group_id, user_id)
-    if key in BLACKJACK_GAMES:
-        return "이미 블랙잭을 하고 있어! `히트` 또는 `스탠드`를 입력해.\n그만하려면 `블랙잭 종료`를 입력해."
+# =========================================================
+# 1인 블랙잭
+# =========================================================
 
-    deck = blackjack_new_deck()
-    game = {
-        "deck": deck,
-        "player_cards": [deck.pop(), deck.pop()],
-        "dealer_cards": [deck.pop(), deck.pop()],
-        "user_name": user_name,
-    }
-    BLACKJACK_GAMES[key] = game
+BLACKJACK_GAMES = {}
 
-    player_score = blackjack_score(game["player_cards"])
-    dealer_score = blackjack_score(game["dealer_cards"])
 
-    # 처음부터 21인 경우 즉시 결과 처리
-    if player_score == 21 or dealer_score == 21:
-        del BLACKJACK_GAMES[key]
-        if player_score == 21 and dealer_score == 21:
-            return blackjack_finish_text(user_name, game, "처음 받은 카드로 둘 다 블랙잭!")
-        if player_score == 21:
-            return blackjack_finish_text(user_name, game, "🃏 블랙잭! 처음 받은 카드로 21을 만들었어!")
-        return blackjack_finish_text(user_name, game, "딜러가 처음부터 블랙잭이야!")
+def blackjack_dealer_text(
+    cards,
+    hide_second=False
+):
+
+    if (
+        hide_second
+        and len(cards) >= 2
+    ):
+
+        visible = (
+            blackjack_cards_text(
+                cards[:1]
+            )
+            + "  🂠"
+        )
+
+        return (
+            f"🤖 딜러\n"
+            f"🃏 {visible}\n"
+            f"합계: ?"
+        )
 
     return (
-        f"🎰 블랙잭 시작!\n\n"
-        f"👤 {user_name}\n🃏 {blackjack_cards_text(game['player_cards'])}\n합계: {player_score}\n\n"
-        f"{blackjack_dealer_text(game['dealer_cards'], hide_second=True)}\n\n"
+        f"🤖 딜러\n"
+        f"🃏 {blackjack_cards_text(cards)}\n"
+        f"합계: "
+        f"{blackjack_score_text(cards)}"
+    )
+
+
+def blackjack_finish_text(
+    player_name,
+    game,
+    reason=""
+):
+
+    player_score = blackjack_score(
+        game["player_cards"]
+    )
+
+    dealer_score = blackjack_score(
+        game["dealer_cards"]
+    )
+
+    if player_score > 21:
+
+        result = (
+            "💥 버스트! "
+            "네가 21을 넘어서 패배했어."
+        )
+
+    elif dealer_score > 21:
+
+        result = (
+            "🎉 딜러가 버스트했어! "
+            "네 승리!"
+        )
+
+    elif player_score > dealer_score:
+
+        result = "🎉 네 승리!"
+
+    elif player_score < dealer_score:
+
+        result = "😢 딜러 승리!"
+
+    else:
+
+        result = "🤝 무승부!"
+
+    prefix = (
+        f"{reason}\n"
+        if reason
+        else ""
+    )
+
+    return (
+        f"{prefix}"
+        "🎰 블랙잭 결과\n\n"
+
+        f"👤 {player_name}\n"
+        f"🃏 {blackjack_cards_text(game['player_cards'])}\n"
+        f"합계: "
+        f"{blackjack_score_text(game['player_cards'])}\n\n"
+
+        f"{blackjack_dealer_text(game['dealer_cards'])}\n\n"
+
+        f"{result}\n\n"
+        "새 게임은 `블랙잭`을 입력해!"
+    )
+
+
+def blackjack_start(
+    group_id,
+    user_id,
+    user_name
+):
+
+    key = (
+        group_id,
+        user_id
+    )
+
+    if key in BLACKJACK_GAMES:
+
+        return (
+            "이미 블랙잭을 하고 있어!\n"
+            "`히트` 또는 `스탠드`를 입력해.\n"
+            "그만하려면 "
+            "`블랙잭 종료`를 입력해."
+        )
+
+    deck = blackjack_new_deck()
+
+    game = {
+
+        "deck":
+            deck,
+
+        "player_cards": [
+            deck.pop(),
+            deck.pop()
+        ],
+
+        "dealer_cards": [
+            deck.pop(),
+            deck.pop()
+        ],
+
+        "user_name":
+            user_name
+    }
+
+    BLACKJACK_GAMES[key] = game
+
+    player_score = blackjack_score(
+        game["player_cards"]
+    )
+
+    dealer_score = blackjack_score(
+        game["dealer_cards"]
+    )
+
+    if (
+        player_score == 21
+        or dealer_score == 21
+    ):
+
+        del BLACKJACK_GAMES[key]
+
+        if (
+            player_score == 21
+            and dealer_score == 21
+        ):
+
+            return blackjack_finish_text(
+                user_name,
+                game,
+                "처음 받은 카드로 둘 다 블랙잭!"
+            )
+
+        if player_score == 21:
+
+            return blackjack_finish_text(
+                user_name,
+                game,
+                "🃏 블랙잭! 처음 받은 카드로 21을 만들었어!"
+            )
+
+        return blackjack_finish_text(
+            user_name,
+            game,
+            "딜러가 처음부터 블랙잭이야!"
+        )
+
+    return (
+        "🎰 블랙잭 시작!\n\n"
+
+        f"👤 {user_name}\n"
+        f"🃏 "
+        f"{blackjack_cards_text(game['player_cards'])}\n"
+        f"합계: "
+        f"{blackjack_score_text(game['player_cards'])}\n\n"
+
+        f"{blackjack_dealer_text(game['dealer_cards'], True)}\n\n"
+
         "`히트` — 카드 한 장 더 받기\n"
         "`스탠드` — 카드 받기 멈추기\n"
         "`블랙잭 종료` — 게임 종료"
     )
 
 
-def blackjack_hit(group_id, user_id, user_name):
-    key = (group_id, user_id)
-    game = BLACKJACK_GAMES.get(key)
+def blackjack_hit(
+    group_id,
+    user_id,
+    user_name
+):
+
+    key = (
+        group_id,
+        user_id
+    )
+
+    game = BLACKJACK_GAMES.get(
+        key
+    )
+
     if not game:
-        return "진행 중인 블랙잭이 없어! 먼저 `블랙잭`을 입력해."
+
+        return (
+            "진행 중인 블랙잭이 없어! "
+            "먼저 `블랙잭`을 입력해."
+        )
 
     if not game["deck"]:
-        game["deck"] = blackjack_new_deck()
 
-    game["player_cards"].append(game["deck"].pop())
-    score = blackjack_score(game["player_cards"])
+        game["deck"] = (
+            blackjack_new_deck()
+        )
+
+    card = game["deck"].pop()
+
+    game["player_cards"].append(
+        card
+    )
+
+    score = blackjack_score(
+        game["player_cards"]
+    )
 
     if score >= 21:
+
         if score > 21:
-            # 버스트: 딜러 카드도 공개하고 종료
+
             del BLACKJACK_GAMES[key]
-            return blackjack_finish_text(user_name, game)
-        # 21이면 자동 스탠드 후 딜러 진행
-        while blackjack_score(game["dealer_cards"]) < 17 and game["deck"]:
-            game["dealer_cards"].append(game["deck"].pop())
+
+            return blackjack_finish_text(
+                user_name,
+                game
+            )
+
+        while (
+            blackjack_score(
+                game["dealer_cards"]
+            ) < 17
+            and game["deck"]
+        ):
+
+            game["dealer_cards"].append(
+                game["deck"].pop()
+            )
+
         del BLACKJACK_GAMES[key]
-        return blackjack_finish_text(user_name, game, "21을 만들었어! 딜러 차례야.")
+
+        return blackjack_finish_text(
+            user_name,
+            game,
+            "21을 만들었어! 딜러 차례야."
+        )
 
     return (
-        f"👤 {user_name}\n🃏 {blackjack_cards_text(game['player_cards'])}\n합계: {score}\n\n"
-        f"{blackjack_dealer_text(game['dealer_cards'], hide_second=True)}\n\n"
+        f"👤 {user_name}\n"
+        f"🃏 "
+        f"{blackjack_cards_text(game['player_cards'])}\n"
+        f"합계: "
+        f"{blackjack_score_text(game['player_cards'])}\n\n"
+
+        f"{blackjack_dealer_text(game['dealer_cards'], True)}\n\n"
+
         "`히트` 또는 `스탠드`를 입력해!"
     )
 
 
-def blackjack_stand(group_id, user_id, user_name):
-    key = (group_id, user_id)
-    game = BLACKJACK_GAMES.get(key)
-    if not game:
-        return "진행 중인 블랙잭이 없어! 먼저 `블랙잭`을 입력해."
+def blackjack_stand(
+    group_id,
+    user_id,
+    user_name
+):
 
-    while blackjack_score(game["dealer_cards"]) < 17 and game["deck"]:
-        game["dealer_cards"].append(game["deck"].pop())
+    key = (
+        group_id,
+        user_id
+    )
+
+    game = BLACKJACK_GAMES.get(
+        key
+    )
+
+    if not game:
+
+        return (
+            "진행 중인 블랙잭이 없어! "
+            "먼저 `블랙잭`을 입력해."
+        )
+
+    while (
+        blackjack_score(
+            game["dealer_cards"]
+        ) < 17
+        and game["deck"]
+    ):
+
+        game["dealer_cards"].append(
+            game["deck"].pop()
+        )
 
     del BLACKJACK_GAMES[key]
-    return blackjack_finish_text(user_name, game)
 
-
-def blackjack_cancel(group_id, user_id):
-    key = (group_id, user_id)
-    if BLACKJACK_GAMES.pop(key, None) is None:
-        return "종료할 블랙잭 게임이 없어."
-    return "🛑 블랙잭을 종료했어. 다시 하려면 `블랙잭`을 입력해!"
-
-# =========================================================
-# 블랙잭 (유저 vs 유저)
-# 방마다 한 번에 한 개의 대결을 진행
-# =========================================================
-
-BLACKJACK_DUELS = {}       # group_id -> duel
-BLACKJACK_CHALLENGES = {}  # group_id -> pending challenge
-
-
-def blackjack_duel_board(duel, reveal_all=False):
-    lines = ["🎰 블랙잭 대결 진행 중!\n"]
-    for uid in duel["players"]:
-        name = duel["names"][uid]
-        cards = duel["cards"][uid]
-        score = blackjack_score(cards)
-        status = " (스탠드)" if uid in duel["stood"] else ""
-        lines.append(f"👤 {name}{status}\n🃏 {blackjack_cards_text(cards)}\n합계: {score}")
-    if not reveal_all:
-        current = duel["players"][duel["turn"]]
-        lines.append(f"\n➡️ {duel['names'][current]}의 차례!\n`히트` 또는 `스탠드`")
-    return "\n\n".join(lines)
-
-
-def blackjack_duel_result(duel, reason=""):
-    lines = ["🎰 블랙잭 대결 결과!\n"]
-    scores = {}
-    for uid in duel["players"]:
-        score = blackjack_score(duel["cards"][uid])
-        scores[uid] = score
-        lines.append(f"👤 {duel['names'][uid]}\n🃏 {blackjack_cards_text(duel['cards'][uid])}\n합계: {score}")
-    a, b = duel["players"]
-    sa, sb = scores[a], scores[b]
-    if sa > 21 and sb > 21:
-        result = "🤝 둘 다 버스트! 무승부!"
-    elif sa > 21:
-        result = f"🏆 {duel['names'][b]} 승리! ({sa} vs {sb})"
-    elif sb > 21:
-        result = f"🏆 {duel['names'][a]} 승리! ({sa} vs {sb})"
-    elif sa > sb:
-        result = f"🏆 {duel['names'][a]} 승리! ({sa} vs {sb})"
-    elif sb > sa:
-        result = f"🏆 {duel['names'][b]} 승리! ({sb} vs {sa})"
-    else:
-        result = f"🤝 무승부! ({sa} vs {sb})"
-    prefix = f"{reason}\n\n" if reason else ""
-    return prefix + "\n\n".join(lines) + f"\n\n{result}\n\n새 대결은 `블랙잭 상대이름`으로 신청해!"
-
-
-def blackjack_duel_advance(duel):
-    """현재 플레이어가 멈췄으면 다음 플레이어로 넘기고, 모두 멈췄으면 결과를 반환."""
-    if len(duel["stood"]) == 2:
-        return blackjack_duel_result(duel)
-    for offset in (1, 2):
-        index = (duel["turn"] + offset) % 2
-        uid = duel["players"][index]
-        if uid not in duel["stood"]:
-            duel["turn"] = index
-            return blackjack_duel_board(duel)
-    return blackjack_duel_result(duel)
-
-
-def blackjack_duel_challenge(group_id, challenger_id, challenger_name, target_name):
-    if group_id in BLACKJACK_DUELS:
-        return "이 방에서는 이미 블랙잭 대결이 진행 중이야!"
-    if group_id in BLACKJACK_CHALLENGES:
-        return "이미 수락을 기다리는 대결 신청이 있어. 먼저 수락하거나 거절해 줘."
-    target_name = target_name.strip()
-    if not target_name:
-        return "상대 이름을 입력해 줘. 예: `블랙잭 철수`"
-    if target_name == challenger_name:
-        return "자기 자신에게는 대결을 신청할 수 없어!"
-    BLACKJACK_CHALLENGES[group_id] = {
-        "challenger_id": challenger_id,
-        "challenger_name": challenger_name,
-        "target_name": target_name,
-        "created_at": time.time(),
-    }
-    return (
-        "🃏 블랙잭 대결 신청!\n\n"
-        f"{challenger_name} ⚔️ {target_name}\n\n"
-        f"{target_name}님, 수락하려면 `수락`, 거절하려면 `거절`을 입력해!"
+    return blackjack_finish_text(
+        user_name,
+        game
     )
 
 
-def blackjack_duel_accept(group_id, user_id, user_name):
-    challenge = BLACKJACK_CHALLENGES.get(group_id)
+def blackjack_cancel(
+    group_id,
+    user_id
+):
+
+    key = (
+        group_id,
+        user_id
+    )
+
+    if BLACKJACK_GAMES.pop(
+        key,
+        None
+    ) is None:
+
+        return (
+            "종료할 블랙잭 게임이 없어."
+        )
+
+    return (
+        "🛑 블랙잭을 종료했어.\n"
+        "다시 하려면 `블랙잭`을 입력해!"
+    )
+
+
+# =========================================================
+# 블랙잭 유저 vs 유저
+# =========================================================
+
+BLACKJACK_DUELS = {}
+
+BLACKJACK_CHALLENGES = {}
+
+
+def blackjack_duel_board(
+    duel,
+    reveal_all=False
+):
+
+    lines = [
+        "🎰 블랙잭 대결 진행 중!\n"
+    ]
+
+    for uid in duel["players"]:
+
+        name = duel["names"][uid]
+
+        cards = duel["cards"][uid]
+
+        status = (
+            " (스탠드)"
+            if uid in duel["stood"]
+            else ""
+        )
+
+        lines.append(
+            f"👤 {name}{status}\n"
+            f"🃏 {blackjack_cards_text(cards)}\n"
+            f"합계: "
+            f"{blackjack_score_text(cards)}"
+        )
+
+    if not reveal_all:
+
+        current = duel[
+            "players"
+        ][
+            duel["turn"]
+        ]
+
+        lines.append(
+            f"\n➡️ "
+            f"{duel['names'][current]}의 차례!\n"
+            "`히트` 또는 `스탠드`"
+        )
+
+    return "\n\n".join(
+        lines
+    )
+
+
+def blackjack_duel_result(
+    duel,
+    reason=""
+):
+
+    lines = [
+        "🎰 블랙잭 대결 결과!\n"
+    ]
+
+    scores = {}
+
+    for uid in duel["players"]:
+
+        cards = duel["cards"][uid]
+
+        score = blackjack_score(
+            cards
+        )
+
+        scores[uid] = score
+
+        lines.append(
+            f"👤 {duel['names'][uid]}\n"
+            f"🃏 {blackjack_cards_text(cards)}\n"
+            f"합계: "
+            f"{blackjack_score_text(cards)}"
+        )
+
+    a, b = duel["players"]
+
+    sa = scores[a]
+    sb = scores[b]
+
+    if (
+        sa > 21
+        and sb > 21
+    ):
+
+        result = (
+            "🤝 둘 다 버스트! "
+            "무승부!"
+        )
+
+    elif sa > 21:
+
+        result = (
+            f"🏆 {duel['names'][b]} 승리! "
+            f"({sa} vs {sb})"
+        )
+
+    elif sb > 21:
+
+        result = (
+            f"🏆 {duel['names'][a]} 승리! "
+            f"({sa} vs {sb})"
+        )
+
+    elif sa > sb:
+
+        result = (
+            f"🏆 {duel['names'][a]} 승리! "
+            f"({sa} vs {sb})"
+        )
+
+    elif sb > sa:
+
+        result = (
+            f"🏆 {duel['names'][b]} 승리! "
+            f"({sb} vs {sa})"
+        )
+
+    else:
+
+        result = (
+            f"🤝 무승부! "
+            f"({sa} vs {sb})"
+        )
+
+    prefix = (
+        f"{reason}\n\n"
+        if reason
+        else ""
+    )
+
+    return (
+        prefix
+        + "\n\n".join(lines)
+        + "\n\n"
+        + result
+        + "\n\n"
+        + "새 대결은 "
+        "`블랙잭 상대이름`으로 신청해!"
+    )
+
+
+def blackjack_duel_advance(
+    duel
+):
+
+    if len(
+        duel["stood"]
+    ) == 2:
+
+        return blackjack_duel_result(
+            duel
+        )
+
+    for offset in (
+        1,
+        2
+    ):
+
+        index = (
+            duel["turn"]
+            + offset
+        ) % 2
+
+        uid = duel[
+            "players"
+        ][index]
+
+        if uid not in duel["stood"]:
+
+            duel["turn"] = index
+
+            return blackjack_duel_board(
+                duel
+            )
+
+    return blackjack_duel_result(
+        duel
+    )
+
+
+def blackjack_duel_challenge(
+    group_id,
+    challenger_id,
+    challenger_name,
+    target_name
+):
+
+    if group_id in BLACKJACK_DUELS:
+
+        return (
+            "이 방에서는 이미 "
+            "블랙잭 대결이 진행 중이야!"
+        )
+
+    if group_id in BLACKJACK_CHALLENGES:
+
+        return (
+            "이미 수락을 기다리는 "
+            "대결 신청이 있어."
+        )
+
+    target_name = target_name.strip()
+
+    if not target_name:
+
+        return (
+            "상대 이름을 입력해 줘.\n"
+            "예: `블랙잭 철수`"
+        )
+
+    if target_name == challenger_name:
+
+        return (
+            "자기 자신에게는 "
+            "대결을 신청할 수 없어!"
+        )
+
+    BLACKJACK_CHALLENGES[
+        group_id
+    ] = {
+
+        "challenger_id":
+            challenger_id,
+
+        "challenger_name":
+            challenger_name,
+
+        "target_name":
+            target_name,
+
+        "created_at":
+            time.time()
+    }
+
+    return (
+        "🃏 블랙잭 대결 신청!\n\n"
+
+        f"{challenger_name} ⚔️ "
+        f"{target_name}\n\n"
+
+        f"{target_name}님, "
+        "수락하려면 `수락`, "
+        "거절하려면 `거절`을 입력해!"
+    )
+
+
+def blackjack_duel_accept(
+    group_id,
+    user_id,
+    user_name
+):
+
+    challenge = (
+        BLACKJACK_CHALLENGES.get(
+            group_id
+        )
+    )
+
     if not challenge:
-        return "수락할 블랙잭 대결 신청이 없어."
-    if time.time() - challenge["created_at"] > 600:
-        BLACKJACK_CHALLENGES.pop(group_id, None)
-        return "대결 신청이 만료됐어. 다시 신청해 줘!"
-    if user_id == challenge["challenger_id"]:
-        return "신청한 사람은 상대방이 수락해야 해!"
-    if user_name != challenge["target_name"]:
-        return f"{challenge['target_name']}님만 수락할 수 있어!"
-    BLACKJACK_CHALLENGES.pop(group_id, None)
+
+        return (
+            "수락할 블랙잭 "
+            "대결 신청이 없어."
+        )
+
+    if (
+        time.time()
+        - challenge["created_at"]
+        > 600
+    ):
+
+        BLACKJACK_CHALLENGES.pop(
+            group_id,
+            None
+        )
+
+        return (
+            "대결 신청이 만료됐어. "
+            "다시 신청해 줘!"
+        )
+
+    if (
+        user_id
+        == challenge["challenger_id"]
+    ):
+
+        return (
+            "신청한 사람은 "
+            "상대방이 수락해야 해!"
+        )
+
+    if (
+        user_name
+        != challenge["target_name"]
+    ):
+
+        return (
+            f"{challenge['target_name']}님만 "
+            "수락할 수 있어!"
+        )
+
+    BLACKJACK_CHALLENGES.pop(
+        group_id,
+        None
+    )
 
     deck = blackjack_new_deck()
-    a = challenge["challenger_id"]
+
+    a = challenge[
+        "challenger_id"
+    ]
+
     b = user_id
+
     duel = {
-        "players": [a, b],
-        "names": {a: challenge["challenger_name"], b: user_name},
-        "cards": {
-            a: [deck.pop(), deck.pop()],
-            b: [deck.pop(), deck.pop()],
+
+        "players": [
+            a,
+            b
+        ],
+
+        "names": {
+            a:
+                challenge[
+                    "challenger_name"
+                ],
+
+            b:
+                user_name
         },
-        "deck": deck,
-        "stood": set(),
-        "turn": 0,
+
+        "cards": {
+
+            a: [
+                deck.pop(),
+                deck.pop()
+            ],
+
+            b: [
+                deck.pop(),
+                deck.pop()
+            ]
+        },
+
+        "deck":
+            deck,
+
+        "stood":
+            set(),
+
+        "turn":
+            0
     }
-    BLACKJACK_DUELS[group_id] = duel
-    # 처음부터 21인 플레이어는 자동으로 스탠드 처리
+
+    BLACKJACK_DUELS[
+        group_id
+    ] = duel
+
     for uid in duel["players"]:
-        if blackjack_score(duel["cards"][uid]) == 21:
-            duel["stood"].add(uid)
-    if len(duel["stood"]) == 2:
-        result = blackjack_duel_result(duel, "처음 받은 카드로 둘 다 21이야!")
-        BLACKJACK_DUELS.pop(group_id, None)
+
+        if (
+            blackjack_score(
+                duel["cards"][uid]
+            )
+            == 21
+        ):
+
+            duel["stood"].add(
+                uid
+            )
+
+    if len(
+        duel["stood"]
+    ) == 2:
+
+        result = blackjack_duel_result(
+            duel,
+            "처음 받은 카드로 둘 다 21이야!"
+        )
+
+        BLACKJACK_DUELS.pop(
+            group_id,
+            None
+        )
+
         return result
-    if duel["players"][0] in duel["stood"]:
+
+    if (
+        duel["players"][0]
+        in duel["stood"]
+    ):
+
         duel["turn"] = 1
-    return "🎰 블랙잭 대결 시작!\n\n" + blackjack_duel_board(duel)
+
+    return (
+        "🎰 블랙잭 대결 시작!\n\n"
+        + blackjack_duel_board(
+            duel
+        )
+    )
 
 
-def blackjack_duel_decline(group_id, user_id, user_name):
-    challenge = BLACKJACK_CHALLENGES.get(group_id)
+def blackjack_duel_decline(
+    group_id,
+    user_id,
+    user_name
+):
+
+    challenge = (
+        BLACKJACK_CHALLENGES.get(
+            group_id
+        )
+    )
+
     if not challenge:
-        return "거절할 블랙잭 대결 신청이 없어."
-    if user_id == challenge["challenger_id"] or user_name != challenge["target_name"]:
-        return f"{challenge['target_name']}님만 거절할 수 있어."
-    BLACKJACK_CHALLENGES.pop(group_id, None)
-    return f"❌ {user_name}님이 {challenge['challenger_name']}님의 블랙잭 대결을 거절했어."
+
+        return (
+            "거절할 블랙잭 "
+            "대결 신청이 없어."
+        )
+
+    if (
+        user_id
+        == challenge["challenger_id"]
+        or
+        user_name
+        != challenge["target_name"]
+    ):
+
+        return (
+            f"{challenge['target_name']}님만 "
+            "거절할 수 있어."
+        )
+
+    BLACKJACK_CHALLENGES.pop(
+        group_id,
+        None
+    )
+
+    return (
+        f"❌ {user_name}님이 "
+        f"{challenge['challenger_name']}님의 "
+        "블랙잭 대결을 거절했어."
+    )
 
 
-def blackjack_duel_action(group_id, user_id, action):
-    duel = BLACKJACK_DUELS.get(group_id)
+def blackjack_duel_action(
+    group_id,
+    user_id,
+    action
+):
+
+    duel = BLACKJACK_DUELS.get(
+        group_id
+    )
+
     if not duel:
         return None
+
     if user_id not in duel["players"]:
-        return "현재 대결 중인 두 사람만 히트 또는 스탠드를 할 수 있어."
+
+        return (
+            "현재 대결 중인 "
+            "두 사람만 히트 또는 "
+            "스탠드를 할 수 있어."
+        )
+
     if user_id in duel["stood"]:
-        return "너는 이미 스탠드했어. 상대방 차례를 기다려 줘."
-    current = duel["players"][duel["turn"]]
+
+        return (
+            "너는 이미 스탠드했어. "
+            "상대방 차례를 기다려 줘."
+        )
+
+    current = duel[
+        "players"
+    ][
+        duel["turn"]
+    ]
+
     if user_id != current:
-        return f"아직 {duel['names'][current]}의 차례야!"
+
+        return (
+            f"아직 "
+            f"{duel['names'][current]}의 "
+            "차례야!"
+        )
 
     if action == "hit":
-        if not duel["deck"]:
-            duel["deck"] = blackjack_new_deck()
-        duel["cards"][user_id].append(duel["deck"].pop())
-        score = blackjack_score(duel["cards"][user_id])
-        if score > 21:
-            duel["stood"].add(user_id)
-            message = f"💥 {duel['names'][user_id]} 버스트! ({score})\n\n"
-            if len(duel["stood"]) == 2:
-                result = blackjack_duel_result(duel)
-                BLACKJACK_DUELS.pop(group_id, None)
-                return message + result
-            return message + blackjack_duel_advance(duel)
-        if score == 21:
-            duel["stood"].add(user_id)
-            message = f"🎯 {duel['names'][user_id]} 21 도달! 자동으로 스탠드했어.\n\n"
-            if len(duel["stood"]) == 2:
-                result = blackjack_duel_result(duel)
-                BLACKJACK_DUELS.pop(group_id, None)
-                return message + result
-            return message + blackjack_duel_advance(duel)
-        return f"🃏 {duel['names'][user_id]} 히트!\n합계: {score}\n\n" + blackjack_duel_board(duel)
 
-    duel["stood"].add(user_id)
-    message = f"✋ {duel['names'][user_id]} 스탠드!\n\n"
-    if len(duel["stood"]) == 2:
-        result = blackjack_duel_result(duel)
-        BLACKJACK_DUELS.pop(group_id, None)
-        return message + result
-    return message + blackjack_duel_advance(duel)
+        if not duel["deck"]:
+
+            duel["deck"] = (
+                blackjack_new_deck()
+            )
+
+        duel["cards"][
+            user_id
+        ].append(
+            duel["deck"].pop()
+        )
+
+        score = blackjack_score(
+            duel["cards"][user_id]
+        )
+
+        if score > 21:
+
+            duel["stood"].add(
+                user_id
+            )
+
+            message = (
+                f"💥 "
+                f"{duel['names'][user_id]} "
+                f"버스트! "
+                f"({blackjack_score_text(duel['cards'][user_id])})\n\n"
+            )
+
+            if len(
+                duel["stood"]
+            ) == 2:
+
+                result = blackjack_duel_result(
+                    duel
+                )
+
+                BLACKJACK_DUELS.pop(
+                    group_id,
+                    None
+                )
+
+                return (
+                    message
+                    + result
+                )
+
+            return (
+                message
+                + blackjack_duel_advance(
+                    duel
+                )
+            )
+
+        if score == 21:
+
+            duel["stood"].add(
+                user_id
+            )
+
+            message = (
+                f"🎯 "
+                f"{duel['names'][user_id]} "
+                "21 도달! "
+                "자동으로 스탠드했어.\n\n"
+            )
+
+            if len(
+                duel["stood"]
+            ) == 2:
+
+                result = blackjack_duel_result(
+                    duel
+                )
+
+                BLACKJACK_DUELS.pop(
+                    group_id,
+                    None
+                )
+
+                return (
+                    message
+                    + result
+                )
+
+            return (
+                message
+                + blackjack_duel_advance(
+                    duel
+                )
+            )
+
+        return (
+            f"🃏 "
+            f"{duel['names'][user_id]} 히트!\n"
+            f"합계: "
+            f"{blackjack_score_text(duel['cards'][user_id])}\n\n"
+            + blackjack_duel_board(
+                duel
+            )
+        )
+
+    duel["stood"].add(
+        user_id
+    )
+
+    message = (
+        f"✋ "
+        f"{duel['names'][user_id]} "
+        "스탠드!\n\n"
+    )
+
+    if len(
+        duel["stood"]
+    ) == 2:
+
+        result = blackjack_duel_result(
+            duel
+        )
+
+        BLACKJACK_DUELS.pop(
+            group_id,
+            None
+        )
+
+        return (
+            message
+            + result
+        )
+
+    return (
+        message
+        + blackjack_duel_advance(
+            duel
+        )
+    )
 
 
 # =========================================================
@@ -2228,10 +3256,6 @@ def webhook():
         if not group_id:
             continue
 
-        # =================================================
-        # LINE 실제 메시지 시간
-        # =================================================
-
         event_time = get_event_datetime(
             event
         )
@@ -2254,7 +3278,7 @@ def webhook():
         )
 
         # =================================================
-        # 이름 변환
+        # 닉네임 변환
         # =================================================
 
         formatted = make_name_format(
@@ -2271,13 +3295,7 @@ def webhook():
             continue
 
         # =================================================
-        # ★ AI 질문
-        # =================================================
-        # !뭐해
-        # !오늘 날씨 어때
-        # !아무 질문
-        #
-        # 이제 Push가 아니라 Reply API 사용
+        # ! AI 질문
         # =================================================
 
         if text.startswith("!"):
@@ -2293,8 +3311,6 @@ def webhook():
                     prompt
                 )
 
-                # Gemini가 답변을 생성한 후
-                # 같은 이벤트의 replyToken으로 답변
                 answer = answer_ai_question(
                     prompt
                 )
@@ -2307,7 +3323,7 @@ def webhook():
             continue
 
         # =================================================
-        # 명령어 판별
+        # 명령어 정리
         # =================================================
 
         normalized = re.sub(
@@ -2317,83 +3333,233 @@ def webhook():
         )
 
         # =================================================
-        # 유저 vs 유저 블랙잭 (Reply API)
+        # 유저 vs 유저 블랙잭
         # =================================================
 
-        # 대결 신청: "블랙잭 상대이름"
-        duel_match = re.match(r"^블랙잭\s+(.+)$", text)
-        if duel_match and normalized not in ["블랙잭종료", "종료블랙잭"]:
-            target_name = duel_match.group(1).strip()
+        duel_match = re.match(
+            r"^블랙잭\s+(.+)$",
+            text
+        )
+
+        if (
+            duel_match
+            and normalized
+            not in [
+                "블랙잭종료",
+                "종료블랙잭"
+            ]
+        ):
+
+            target_name = (
+                duel_match
+                .group(1)
+                .strip()
+            )
+
             reply_message(
                 reply_token,
                 blackjack_duel_challenge(
-                    group_id, user_id, user_name, target_name
+                    group_id,
+                    user_id,
+                    user_name,
+                    target_name
                 )
             )
+
             continue
 
         if normalized == "수락":
+
             reply_message(
                 reply_token,
-                blackjack_duel_accept(group_id, user_id, user_name)
+                blackjack_duel_accept(
+                    group_id,
+                    user_id,
+                    user_name
+                )
             )
+
             continue
 
         if normalized == "거절":
+
             reply_message(
                 reply_token,
-                blackjack_duel_decline(group_id, user_id, user_name)
+                blackjack_duel_decline(
+                    group_id,
+                    user_id,
+                    user_name
+                )
             )
+
             continue
 
-        if normalized in ["대결취소", "블랙잭대결취소"]:
-            challenge = BLACKJACK_CHALLENGES.get(group_id)
-            if challenge and challenge["challenger_id"] == user_id:
-                BLACKJACK_CHALLENGES.pop(group_id, None)
-                reply_message(reply_token, "신청한 블랙잭 대결을 취소했어.")
+        if normalized in [
+            "대결취소",
+            "블랙잭대결취소"
+        ]:
+
+            challenge = (
+                BLACKJACK_CHALLENGES.get(
+                    group_id
+                )
+            )
+
+            if (
+                challenge
+                and
+                challenge["challenger_id"]
+                == user_id
+            ):
+
+                BLACKJACK_CHALLENGES.pop(
+                    group_id,
+                    None
+                )
+
+                reply_message(
+                    reply_token,
+                    "신청한 블랙잭 대결을 취소했어."
+                )
+
             else:
-                reply_message(reply_token, "취소할 네 대결 신청이 없어.")
+
+                reply_message(
+                    reply_token,
+                    "취소할 네 대결 신청이 없어."
+                )
+
             continue
 
-        if normalized in ["히트", "카드더", "한장더", "스탠드", "스탑", "멈춤"]:
-            duel = BLACKJACK_DUELS.get(group_id)
+        # =================================================
+        # 진행 중인 유저 vs 유저 블랙잭
+        # =================================================
+
+        if normalized in [
+            "히트",
+            "카드더",
+            "한장더"
+        ]:
+
+            duel = BLACKJACK_DUELS.get(
+                group_id
+            )
+
             if duel:
-                action = "hit" if normalized in ["히트", "카드더", "한장더"] else "stand"
-                duel_response = blackjack_duel_action(group_id, user_id, action)
-                if duel_response is not None:
-                    reply_message(reply_token, duel_response)
-                    continue
+
+                reply_message(
+                    reply_token,
+                    blackjack_duel_action(
+                        group_id,
+                        user_id,
+                        "hit"
+                    )
+                )
+
+                continue
+
+        if normalized in [
+            "스탠드",
+            "스탑",
+            "멈춤"
+        ]:
+
+            duel = BLACKJACK_DUELS.get(
+                group_id
+            )
+
+            if duel:
+
+                reply_message(
+                    reply_token,
+                    blackjack_duel_action(
+                        group_id,
+                        user_id,
+                        "stand"
+                    )
+                )
+
+                continue
 
         # =================================================
-        # 블랙잭 명령어 (Reply API만 사용)
+        # 1인 블랙잭 종료
         # =================================================
 
-        if normalized in ["블랙잭종료", "종료블랙잭"]:
+        if normalized in [
+            "블랙잭종료",
+            "종료블랙잭"
+        ]:
+
             reply_message(
                 reply_token,
-                blackjack_cancel(group_id, user_id)
+                blackjack_cancel(
+                    group_id,
+                    user_id
+                )
             )
+
             continue
 
-        if normalized in ["블랙잭", "블랙잭시작"]:
+        # =================================================
+        # 1인 블랙잭 시작
+        # =================================================
+
+        if normalized in [
+            "블랙잭",
+            "블랙잭시작"
+        ]:
+
             reply_message(
                 reply_token,
-                blackjack_start(group_id, user_id, user_name)
+                blackjack_start(
+                    group_id,
+                    user_id,
+                    user_name
+                )
             )
+
             continue
 
-        if normalized in ["히트", "카드더", "한장더"]:
+        # =================================================
+        # 1인 블랙잭 히트
+        # =================================================
+
+        if normalized in [
+            "히트",
+            "카드더",
+            "한장더"
+        ]:
+
             reply_message(
                 reply_token,
-                blackjack_hit(group_id, user_id, user_name)
+                blackjack_hit(
+                    group_id,
+                    user_id,
+                    user_name
+                )
             )
+
             continue
 
-        if normalized in ["스탠드", "스탑", "멈춤"]:
+        # =================================================
+        # 1인 블랙잭 스탠드
+        # =================================================
+
+        if normalized in [
+            "스탠드",
+            "스탑",
+            "멈춤"
+        ]:
+
             reply_message(
                 reply_token,
-                blackjack_stand(group_id, user_id, user_name)
+                blackjack_stand(
+                    group_id,
+                    user_id,
+                    user_name
+                )
             )
+
             continue
 
         # =================================================
@@ -2544,10 +3710,6 @@ def webhook():
                     group_id,
                     reply_token
                 )
-
-    # =====================================================
-    # LINE에 즉시 200
-    # =====================================================
 
     return (
         "OK",
