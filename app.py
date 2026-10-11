@@ -3,7 +3,6 @@ import requests
 import hashlib
 import hmac
 import base64
-import json
 import os
 import re
 import random
@@ -27,13 +26,20 @@ SUPABASE_URL = os.environ.get(
     ""
 ).rstrip("/")
 
-SUPABASE_KEY = os.environ.get(
-    "SUPABASE_KEY"
-)
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-GEMINI_API_KEY = os.environ.get(
-    "GEMINI_API_KEY"
-)
+
+# =========================================================
+# HTTP Session
+# 연결을 매번 새로 만들지 않고 재사용
+# =========================================================
+
+HTTP = requests.Session()
+
+HTTP.headers.update({
+    "User-Agent": "LINE-Bot/1.0"
+})
 
 
 # =========================================================
@@ -42,14 +48,10 @@ GEMINI_API_KEY = os.environ.get(
 
 KST = ZoneInfo("Asia/Seoul")
 
-# 랜덤 AI 개입 확률
 AI_TRIGGER_CHANCE = 0.03
 
-# 랜덤 AI 쿨타임
-# 1시간
 AI_COOLDOWN_SECONDS = 1 * 60 * 60
 
-# 최근 대화 개수
 RECENT_MESSAGE_LIMIT = 12
 
 
@@ -74,6 +76,18 @@ SEARCH_AI_TIMEOUT = 15
 
 
 # =========================================================
+# 캐시
+# =========================================================
+
+PROFILE_CACHE = {}
+PROFILE_CACHE_SECONDS = 600
+
+
+GROUP_MEMBER_CACHE = {}
+GROUP_MEMBER_CACHE_SECONDS = 60
+
+
+# =========================================================
 # 시간
 # =========================================================
 
@@ -82,19 +96,14 @@ def now_kst():
 
 
 def now_utc_iso():
-    return datetime.now(
-        timezone.utc
-    ).isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 # =========================================================
-# LINE 서명 확인
+# LINE 서명
 # =========================================================
 
-def verify_signature(
-    body,
-    signature
-):
+def verify_signature(body, signature):
 
     if not CHANNEL_SECRET:
         return False
@@ -119,10 +128,7 @@ def verify_signature(
 # LINE API
 # =========================================================
 
-def line_api(
-    endpoint,
-    payload
-):
+def line_api(endpoint, payload):
 
     url = (
         "https://api.line.me/v2/bot/"
@@ -139,23 +145,20 @@ def line_api(
 
     try:
 
-        response = requests.post(
+        response = HTTP.post(
             url,
             headers=headers,
             json=payload,
-            timeout=10
-        )
-
-        print(
-            f"LINE API: {endpoint} "
-            f"{response.status_code}"
+            timeout=8
         )
 
         if response.status_code >= 400:
 
             print(
-                "LINE ERROR:",
-                response.text[:1000]
+                "LINE API ERROR:",
+                endpoint,
+                response.status_code,
+                response.text[:500]
             )
 
         return response
@@ -163,7 +166,7 @@ def line_api(
     except Exception as e:
 
         print(
-            "LINE API ERROR:",
+            "LINE API EXCEPTION:",
             repr(e)
         )
 
@@ -171,13 +174,10 @@ def line_api(
 
 
 # =========================================================
-# LINE GET API
+# LINE GET
 # =========================================================
 
-def line_get(
-    endpoint,
-    params=None
-):
+def line_get(endpoint, params=None):
 
     url = (
         "https://api.line.me/v2/bot/"
@@ -191,23 +191,19 @@ def line_get(
 
     try:
 
-        response = requests.get(
+        response = HTTP.get(
             url,
             headers=headers,
             params=params or {},
-            timeout=8
-        )
-
-        print(
-            f"LINE GET: {endpoint} "
-            f"{response.status_code}"
+            timeout=6
         )
 
         if response.status_code >= 400:
 
             print(
                 "LINE GET ERROR:",
-                response.text[:1000]
+                endpoint,
+                response.status_code
             )
 
         return response
@@ -215,7 +211,7 @@ def line_get(
     except Exception as e:
 
         print(
-            "LINE GET ERROR:",
+            "LINE GET EXCEPTION:",
             repr(e)
         )
 
@@ -226,17 +222,9 @@ def line_get(
 # Reply API
 # =========================================================
 
-def reply_message(
-    reply_token,
-    text
-):
+def reply_message(reply_token, text):
 
     if not reply_token:
-
-        print(
-            "REPLY ERROR: replyToken 없음"
-        )
-
         return
 
     text = str(text)
@@ -244,12 +232,10 @@ def reply_message(
     if len(text) > 4900:
         text = text[:4900]
 
-    response = line_api(
+    line_api(
         "message/reply",
         {
-            "replyToken":
-                reply_token,
-
+            "replyToken": reply_token,
             "messages": [
                 {
                     "type": "text",
@@ -259,22 +245,12 @@ def reply_message(
         }
     )
 
-    if response is not None:
-
-        print(
-            "REPLY MESSAGE STATUS:",
-            response.status_code
-        )
-
 
 # =========================================================
 # Push API
 # =========================================================
 
-def push_message(
-    group_id,
-    text
-):
+def push_message(group_id, text):
 
     if not group_id:
         return
@@ -287,9 +263,7 @@ def push_message(
     line_api(
         "message/push",
         {
-            "to":
-                group_id,
-
+            "to": group_id,
             "messages": [
                 {
                     "type": "text",
@@ -301,18 +275,10 @@ def push_message(
 
 
 # =========================================================
-# LINE 프로필
+# 프로필
 # =========================================================
 
-PROFILE_CACHE = {}
-
-PROFILE_CACHE_SECONDS = 600
-
-
-def get_profile_name(
-    user_id,
-    group_id=None
-):
+def get_profile_name(user_id, group_id=None):
 
     if not user_id:
         return "알 수 없음"
@@ -322,28 +288,16 @@ def get_profile_name(
         user_id
     )
 
-    cached = PROFILE_CACHE.get(
-        cache_key
-    )
+    cached = PROFILE_CACHE.get(cache_key)
 
     if cached:
 
-        cached_name = cached.get(
-            "name"
-        )
-
-        cached_time = cached.get(
-            "time",
-            0
-        )
-
         if (
             time.time()
-            - cached_time
+            - cached["time"]
             < PROFILE_CACHE_SECONDS
         ):
-
-            return cached_name
+            return cached["name"]
 
     headers = {
         "Authorization":
@@ -366,15 +320,10 @@ def get_profile_name(
                 f"{user_id}"
             )
 
-        response = requests.get(
+        response = HTTP.get(
             url,
             headers=headers,
-            timeout=5
-        )
-
-        print(
-            "PROFILE API:",
-            response.status_code
+            timeout=4
         )
 
         if response.status_code == 200:
@@ -386,9 +335,7 @@ def get_profile_name(
                 "알 수 없음"
             )
 
-            PROFILE_CACHE[
-                cache_key
-            ] = {
+            PROFILE_CACHE[cache_key] = {
                 "name": name,
                 "time": time.time()
             }
@@ -406,18 +353,15 @@ def get_profile_name(
 
 
 # =========================================================
-# 현재 그룹 멤버 가져오기
+# 그룹 멤버 ID
 # =========================================================
 
-def get_group_member_ids(
-    group_id
-):
+def get_group_member_ids(group_id):
 
     if not group_id:
         return []
 
     member_ids = []
-
     start = None
 
     while True:
@@ -436,26 +380,18 @@ def get_group_member_ids(
             response is None
             or response.status_code != 200
         ):
-            print(
-                "GROUP MEMBER LIST ERROR"
-            )
             break
 
         try:
-
             data = response.json()
-
         except Exception:
-
             break
 
-        ids = data.get(
-            "memberIds",
-            []
-        )
-
         member_ids.extend(
-            ids
+            data.get(
+                "memberIds",
+                []
+            )
         )
 
         if not data.get(
@@ -464,9 +400,7 @@ def get_group_member_ids(
         ):
             break
 
-        start = data.get(
-            "next"
-        )
+        start = data.get("next")
 
         if not start:
             break
@@ -474,9 +408,29 @@ def get_group_member_ids(
     return member_ids
 
 
-def get_group_members(
-    group_id
-):
+# =========================================================
+# 그룹 멤버
+# 1분 캐시
+# =========================================================
+
+def get_group_members(group_id):
+
+    if not group_id:
+        return {}
+
+    cached = GROUP_MEMBER_CACHE.get(
+        group_id
+    )
+
+    if cached:
+
+        if (
+            time.time()
+            - cached["time"]
+            < GROUP_MEMBER_CACHE_SECONDS
+        ):
+
+            return cached["members"].copy()
 
     member_ids = get_group_member_ids(
         group_id
@@ -486,14 +440,17 @@ def get_group_members(
 
     for user_id in member_ids:
 
-        name = get_profile_name(
+        members[user_id] = get_profile_name(
             user_id,
             group_id
         )
 
-        members[user_id] = name
+    GROUP_MEMBER_CACHE[group_id] = {
+        "members": members,
+        "time": time.time()
+    }
 
-    return members
+    return members.copy()
 
 
 # =========================================================
@@ -503,21 +460,15 @@ def get_group_members(
 def supabase_headers():
 
     return {
-        "apikey":
-            SUPABASE_KEY,
-
+        "apikey": SUPABASE_KEY,
         "Authorization":
             f"Bearer {SUPABASE_KEY}",
-
         "Content-Type":
             "application/json"
     }
 
 
-def supabase_get(
-    table,
-    params=None
-):
+def supabase_get(table, params=None):
 
     if (
         not SUPABASE_URL
@@ -527,19 +478,18 @@ def supabase_get(
 
     try:
 
-        response = requests.get(
+        response = HTTP.get(
             f"{SUPABASE_URL}/rest/v1/{table}",
             headers=supabase_headers(),
             params=params or {},
-            timeout=6
+            timeout=5
         )
 
         if response.status_code >= 400:
 
             print(
                 "SUPABASE GET ERROR:",
-                response.status_code,
-                response.text[:1000]
+                response.status_code
             )
 
             return []
@@ -549,7 +499,7 @@ def supabase_get(
     except Exception as e:
 
         print(
-            "SUPABASE GET ERROR:",
+            "SUPABASE GET EXCEPTION:",
             repr(e)
         )
 
@@ -558,16 +508,12 @@ def supabase_get(
 
 # =========================================================
 # Supabase 전체 조회
-# 1000개 제한 방지
 # =========================================================
 
 SUPABASE_PAGE_SIZE = 1000
 
 
-def supabase_get_all(
-    table,
-    params=None
-):
+def supabase_get_all(table, params=None):
 
     if (
         not SUPABASE_URL
@@ -579,18 +525,10 @@ def supabase_get_all(
         params or {}
     )
 
-    base_params.pop(
-        "limit",
-        None
-    )
-
-    base_params.pop(
-        "offset",
-        None
-    )
+    base_params.pop("limit", None)
+    base_params.pop("offset", None)
 
     all_rows = []
-
     offset = 0
 
     while True:
@@ -609,19 +547,18 @@ def supabase_get_all(
 
         try:
 
-            response = requests.get(
+            response = HTTP.get(
                 f"{SUPABASE_URL}/rest/v1/{table}",
                 headers=supabase_headers(),
                 params=page_params,
-                timeout=10
+                timeout=8
             )
 
             if response.status_code >= 400:
 
                 print(
-                    "SUPABASE PAGINATED GET ERROR:",
-                    response.status_code,
-                    response.text[:1000]
+                    "SUPABASE PAGINATION ERROR:",
+                    response.status_code
                 )
 
                 break
@@ -634,16 +571,7 @@ def supabase_get_all(
             ):
                 break
 
-            all_rows.extend(
-                rows
-            )
-
-            print(
-                f"SUPABASE PAGE: {table} "
-                f"offset={offset} "
-                f"count={len(rows)} "
-                f"total={len(all_rows)}"
-            )
+            all_rows.extend(rows)
 
             if len(rows) < SUPABASE_PAGE_SIZE:
                 break
@@ -653,7 +581,7 @@ def supabase_get_all(
         except Exception as e:
 
             print(
-                "SUPABASE PAGINATED GET ERROR:",
+                "SUPABASE PAGINATION EXCEPTION:",
                 repr(e)
             )
 
@@ -662,46 +590,30 @@ def supabase_get_all(
     return all_rows
 
 
-def supabase_post(
-    table,
-    data
-):
+# =========================================================
+# Supabase POST
+# =========================================================
+
+def supabase_post(table, data):
 
     if (
         not SUPABASE_URL
         or not SUPABASE_KEY
     ):
-
-        print(
-            "SUPABASE 설정 없음"
-        )
-
         return None
 
     headers = supabase_headers()
 
-    headers["Prefer"] = (
-        "return=minimal"
-    )
+    headers["Prefer"] = "return=minimal"
 
     try:
 
-        response = requests.post(
+        return HTTP.post(
             f"{SUPABASE_URL}/rest/v1/{table}",
             headers=headers,
             json=data,
-            timeout=6
+            timeout=5
         )
-
-        if response.status_code >= 400:
-
-            print(
-                "SUPABASE POST ERROR:",
-                response.status_code,
-                response.text[:1000]
-            )
-
-        return response
 
     except Exception as e:
 
@@ -713,11 +625,11 @@ def supabase_post(
         return None
 
 
-def supabase_patch(
-    table,
-    params,
-    data
-):
+# =========================================================
+# Supabase PATCH
+# =========================================================
+
+def supabase_patch(table, params, data):
 
     if (
         not SUPABASE_URL
@@ -727,21 +639,17 @@ def supabase_patch(
 
     headers = supabase_headers()
 
-    headers["Prefer"] = (
-        "return=minimal"
-    )
+    headers["Prefer"] = "return=minimal"
 
     try:
 
-        response = requests.patch(
+        return HTTP.patch(
             f"{SUPABASE_URL}/rest/v1/{table}",
             headers=headers,
             params=params,
             json=data,
-            timeout=6
+            timeout=5
         )
-
-        return response
 
     except Exception as e:
 
@@ -753,10 +661,11 @@ def supabase_patch(
         return None
 
 
-def supabase_delete(
-    table,
-    params
-):
+# =========================================================
+# Supabase DELETE
+# =========================================================
+
+def supabase_delete(table, params):
 
     if (
         not SUPABASE_URL
@@ -766,22 +675,12 @@ def supabase_delete(
 
     try:
 
-        response = requests.delete(
+        return HTTP.delete(
             f"{SUPABASE_URL}/rest/v1/{table}",
             headers=supabase_headers(),
             params=params,
-            timeout=6
+            timeout=5
         )
-
-        if response.status_code >= 400:
-
-            print(
-                "SUPABASE DELETE ERROR:",
-                response.status_code,
-                response.text[:1000]
-            )
-
-        return response
 
     except Exception as e:
 
@@ -794,12 +693,10 @@ def supabase_delete(
 
 
 # =========================================================
-# LINE 실제 메시지 시간
+# 이벤트 시간
 # =========================================================
 
-def get_event_datetime(
-    event
-):
+def get_event_datetime(event):
 
     timestamp = event.get(
         "timestamp"
@@ -815,16 +712,9 @@ def get_event_datetime(
             tz=timezone.utc
         )
 
-        return dt.astimezone(
-            KST
-        )
+        return dt.astimezone(KST)
 
-    except Exception as e:
-
-        print(
-            "EVENT TIME ERROR:",
-            repr(e)
-        )
+    except Exception:
 
         return now_kst()
 
@@ -848,24 +738,12 @@ def save_chat_message(
         event_time = now_kst()
 
     data = {
-
-        "group_id":
-            group_id,
-
-        "user_id":
-            user_id,
-
-        "user_name":
-            user_name,
-
-        "message":
-            message,
-
+        "group_id": group_id,
+        "user_id": user_id,
+        "user_name": user_name,
+        "message": message,
         "date_kst":
-            event_time.strftime(
-                "%Y-%m-%d"
-            ),
-
+            event_time.strftime("%Y-%m-%d"),
         "hour_kst":
             event_time.hour
     }
@@ -880,28 +758,12 @@ def save_chat_message(
         and response.status_code < 300
     ):
 
-        print(
-            "CHAT SAVED:",
-            event_time.strftime(
-                "%Y-%m-%d %H:%M:%S"
-            ),
-            user_name,
-            message[:50]
-        )
-
         return True
-
-    print(
-        "CHAT SAVE FAILED:",
-        user_name
-    )
 
     return False
 
 
-def is_laughter_only(
-    text
-):
+def is_laughter_only(text):
 
     if not text:
         return False
@@ -915,12 +777,11 @@ def is_laughter_only(
 
 
 # =========================================================
-# 소통량 조회
+# 오늘 메시지
+# 필요한 데이터만 가져옴
 # =========================================================
 
-def get_today_messages(
-    group_id
-):
+def get_today_messages(group_id):
 
     today = now_kst().strftime(
         "%Y-%m-%d"
@@ -936,7 +797,7 @@ def get_today_messages(
                 f"eq.{today}",
 
             "select":
-                "*",
+                "user_id,user_name,date_kst,hour_kst",
 
             "order":
                 "created_at.asc"
@@ -944,9 +805,12 @@ def get_today_messages(
     )
 
 
-def get_all_group_messages(
-    group_id
-):
+# =========================================================
+# 전체 메시지
+# 통계에 필요한 데이터만 가져옴
+# =========================================================
+
+def get_all_group_messages(group_id):
 
     return supabase_get_all(
         "chat_messages",
@@ -955,7 +819,7 @@ def get_all_group_messages(
                 f"eq.{group_id}",
 
             "select":
-                "*",
+                "user_id,user_name,date_kst,hour_kst",
 
             "order":
                 "created_at.asc"
@@ -964,13 +828,10 @@ def get_all_group_messages(
 
 
 # =========================================================
-# ★ 오늘 소통량
-# 0개인 현재 멤버도 포함
+# 오늘 소통량
 # =========================================================
 
-def today_ranking(
-    group_id
-):
+def today_ranking(group_id):
 
     rows = get_today_messages(
         group_id
@@ -979,10 +840,6 @@ def today_ranking(
     counts = {}
     names = {}
 
-    # -----------------------------------------
-    # 현재 그룹 멤버 먼저 등록
-    # -----------------------------------------
-
     current_members = get_group_members(
         group_id
     )
@@ -990,12 +847,7 @@ def today_ranking(
     for user_id, name in current_members.items():
 
         counts[user_id] = 0
-
         names[user_id] = name
-
-    # -----------------------------------------
-    # 오늘 메시지 집계
-    # -----------------------------------------
 
     for row in rows:
 
@@ -1012,11 +864,9 @@ def today_ranking(
         )
 
         if user_id not in names:
-
             names[user_id] = name
 
         if user_id not in counts:
-
             counts[user_id] = 0
 
         counts[user_id] += 1
@@ -1035,9 +885,7 @@ def today_ranking(
     return ranking, names
 
 
-def make_ranking_text(
-    group_id
-):
+def make_ranking_text(group_id):
 
     ranking, names = today_ranking(
         group_id
@@ -1071,7 +919,6 @@ def make_ranking_text(
             f"{count}개\n"
         )
 
-        # LINE 메시지 길이 방어
         if len(result) + len(line) > 4700:
 
             result += (
@@ -1099,15 +946,11 @@ def make_my_count_text(
         group_id
     )
 
-    count = 0
-
-    for row in rows:
-
-        if row.get(
-            "user_id"
-        ) == user_id:
-
-            count += 1
+    count = sum(
+        1
+        for row in rows
+        if row.get("user_id") == user_id
+    )
 
     return (
         f"💬 {user_name}님의 오늘 소통량\n"
@@ -1119,9 +962,7 @@ def make_my_count_text(
 # 방 통계
 # =========================================================
 
-def make_room_stats(
-    group_id
-):
+def make_room_stats(group_id):
 
     rows = get_all_group_messages(
         group_id
@@ -1133,7 +974,6 @@ def make_room_stats(
     total = len(rows)
 
     users = set()
-
     day_counts = {}
 
     for row in rows:
@@ -1143,10 +983,7 @@ def make_room_stats(
         )
 
         if user_id:
-
-            users.add(
-                user_id
-            )
+            users.add(user_id)
 
         date = row.get(
             "date_kst"
@@ -1205,7 +1042,6 @@ def make_my_stats(
         return "아직 통계가 없어!"
 
     counts = {}
-
     hour_counts = {}
 
     for row in rows:
@@ -1291,9 +1127,7 @@ def make_my_stats(
 # 소통량 초기화
 # =========================================================
 
-def reset_today(
-    group_id
-):
+def reset_today(group_id):
 
     today = now_kst().strftime(
         "%Y-%m-%d"
@@ -1317,11 +1151,10 @@ def reset_today(
 
 
 # =========================================================
-# 이름 변환
+# 닉네임 변환
 # =========================================================
 
 SUPERSCRIPT_MAP = {
-
     "0": "⁰",
     "1": "¹",
     "2": "²",
@@ -1332,13 +1165,10 @@ SUPERSCRIPT_MAP = {
     "7": "⁷",
     "8": "⁸",
     "9": "⁹"
-
 }
 
 
-def superscript_age(
-    age
-):
+def superscript_age(age):
 
     age = str(age).zfill(2)
 
@@ -1351,9 +1181,7 @@ def superscript_age(
     )
 
 
-def make_name_format(
-    text
-):
+def make_name_format(text):
 
     parts = text.strip().split()
 
@@ -1372,35 +1200,17 @@ def make_name_format(
     kind = kind.lower()
 
     gender_map = {
-
-        "여자":
-            "📡",
-
-        "여":
-            "📡",
-
-        "남자":
-            "🔭",
-
-        "남":
-            "🔭"
-
+        "여자": "📡",
+        "여": "📡",
+        "남자": "🔭",
+        "남": "🔭"
     }
 
     kind_map = {
-
-        "돔":
-            "𝒅",
-
-        "섭":
-            "𝒔",
-
-        "스위치":
-            "𝒔/𝒅",
-
-        "바닐라":
-            "𝒗"
-
+        "돔": "𝒅",
+        "섭": "𝒔",
+        "스위치": "𝒔/𝒅",
+        "바닐라": "𝒗"
     }
 
     if gender not in gender_map:
@@ -1409,14 +1219,10 @@ def make_name_format(
     if kind not in kind_map:
         return None
 
-    age_text = superscript_age(
-        age
-    )
-
     return (
         f"{name}"
         f"{kind_map[kind]}"
-        f"{age_text}"
+        f"{superscript_age(age)}"
         f"{gender_map[gender]}"
     )
 
@@ -1425,9 +1231,7 @@ def make_name_format(
 # 최근 대화
 # =========================================================
 
-def get_recent_messages(
-    group_id
-):
+def get_recent_messages(group_id):
 
     rows = supabase_get(
         "chat_messages",
@@ -1442,30 +1246,21 @@ def get_recent_messages(
                 "created_at.desc",
 
             "limit":
-                str(
-                    RECENT_MESSAGE_LIMIT
-                )
+                str(RECENT_MESSAGE_LIMIT)
         }
     )
 
     rows.reverse()
 
-    result = []
-
-    for row in rows:
-
-        result.append(
-            f"{row.get('user_name', '알 수 없음')}: "
-            f"{row.get('message', '')}"
-        )
-
     return "\n".join(
-        result
+        f"{row.get('user_name', '알 수 없음')}: "
+        f"{row.get('message', '')}"
+        for row in rows
     )
 
 
 # =========================================================
-# Gemini 요청
+# Gemini
 # =========================================================
 
 def gemini_request(
@@ -1476,11 +1271,6 @@ def gemini_request(
 ):
 
     if not GEMINI_API_KEY:
-
-        print(
-            "GEMINI_API_KEY 없음"
-        )
-
         return None
 
     url = (
@@ -1488,31 +1278,19 @@ def gemini_request(
         f"v1beta/models/{model}:generateContent"
     )
 
-    params = {
-        "key":
-            GEMINI_API_KEY
-    }
-
     body = {
-
         "contents": [
             {
                 "parts": [
                     {
-                        "text":
-                            prompt
+                        "text": prompt
                     }
                 ]
             }
         ],
-
         "generationConfig": {
-
-            "temperature":
-                0.8,
-
-            "maxOutputTokens":
-                300
+            "temperature": 0.8,
+            "maxOutputTokens": 300
         }
     }
 
@@ -1528,31 +1306,24 @@ def gemini_request(
 
     try:
 
-        response = requests.post(
+        response = HTTP.post(
             url,
-            params=params,
+            params={
+                "key": GEMINI_API_KEY
+            },
             json=body,
             timeout=timeout
         )
 
-        elapsed = (
-            time.time()
-            - started
-        )
+        elapsed = time.time() - started
 
         print(
-            f"GEMINI {model} "
-            f"status={response.status_code} "
-            f"time={elapsed:.2f}s"
+            f"GEMINI {model}: "
+            f"{response.status_code} "
+            f"{elapsed:.2f}s"
         )
 
         if response.status_code != 200:
-
-            print(
-                "GEMINI ERROR:",
-                response.text[:1000]
-            )
-
             return None
 
         data = response.json()
@@ -1571,30 +1342,18 @@ def gemini_request(
             .get("parts", [])
         )
 
-        texts = []
-
-        for part in parts:
-
-            if "text" in part:
-
-                texts.append(
-                    part["text"]
-                )
-
         answer = "".join(
-            texts
+            part["text"]
+            for part in parts
+            if "text" in part
         ).strip()
 
-        return (
-            answer
-            if answer
-            else None
-        )
+        return answer or None
 
     except Exception as e:
 
         print(
-            f"GEMINI {model} ERROR:",
+            "GEMINI ERROR:",
             repr(e)
         )
 
@@ -1602,11 +1361,10 @@ def gemini_request(
 
 
 # =========================================================
-# 실시간 검색 여부
+# 실시간 검색 키워드
 # =========================================================
 
 REALTIME_KEYWORDS = [
-
     "지금",
     "현재",
     "오늘",
@@ -1614,42 +1372,31 @@ REALTIME_KEYWORDS = [
     "오늘날짜",
     "내일",
     "어제",
-
     "이번주",
     "이번 주",
-
     "이번달",
     "이번 달",
-
     "최신",
     "최근",
     "요즘",
     "업데이트",
-
     "뉴스",
     "속보",
     "사건",
     "사고",
-
     "날씨",
     "기온",
     "미세먼지",
-
     "비 와",
     "비와",
-
     "눈 와",
     "눈와",
-
     "경기 결과",
     "경기결과",
-
     "경기 일정",
     "경기일정",
-
     "스코어",
     "현재 순위",
-
     "환율",
     "주가",
     "주식",
@@ -1657,25 +1404,19 @@ REALTIME_KEYWORDS = [
     "비트코인",
     "가격",
     "시세",
-
     "일정",
     "예매",
     "예약",
-
     "검색해",
     "검색해서",
     "찾아줘",
     "찾아봐",
-
     "인터넷에서",
     "웹에서"
-
 ]
 
 
-def needs_realtime_search(
-    prompt
-):
+def needs_realtime_search(prompt):
 
     text = prompt.lower()
 
@@ -1689,9 +1430,7 @@ def needs_realtime_search(
 # 일반 AI
 # =========================================================
 
-def ask_normal_gemini(
-    prompt
-):
+def ask_normal_gemini(prompt):
 
     system = """
 너는 한국 단체 채팅방의 자연스러운 AI 친구다.
@@ -1738,9 +1477,7 @@ def ask_normal_gemini(
 # 검색 AI
 # =========================================================
 
-def ask_search_gemini(
-    prompt
-):
+def ask_search_gemini(prompt):
 
     system = """
 너는 한국 단체 채팅방의 AI 친구다.
@@ -1782,12 +1519,10 @@ Google 검색을 사용한다.
 
 
 # =========================================================
-# AI 질문 처리
+# AI 질문
 # =========================================================
 
-def answer_ai_question(
-    prompt
-):
+def answer_ai_question(prompt):
 
     realtime = needs_realtime_search(
         prompt
@@ -1795,7 +1530,7 @@ def answer_ai_question(
 
     print(
         f"AI QUESTION: {prompt} | "
-        f"realtime: {realtime}"
+        f"realtime={realtime}"
     )
 
     if realtime:
@@ -1810,12 +1545,10 @@ def answer_ai_question(
 
 
 # =========================================================
-# 랜덤 AI
+# 랜덤 AI 상태
 # =========================================================
 
-def get_last_ai_reply(
-    group_id
-):
+def get_last_ai_reply(group_id):
 
     rows = supabase_get(
         "bot_state",
@@ -1855,9 +1588,7 @@ def get_last_ai_reply(
         return None
 
 
-def can_random_ai_reply(
-    group_id
-):
+def can_random_ai_reply(group_id):
 
     last = get_last_ai_reply(
         group_id
@@ -1869,20 +1600,16 @@ def can_random_ai_reply(
     elapsed = (
         datetime.now(
             timezone.utc
-        )
-        - last
+        ) - last
     ).total_seconds()
 
     return (
         elapsed
-        >=
-        AI_COOLDOWN_SECONDS
+        >= AI_COOLDOWN_SECONDS
     )
 
 
-def save_last_ai_reply(
-    group_id
-):
+def save_last_ai_reply(group_id):
 
     existing = supabase_get(
         "bot_state",
@@ -1899,7 +1626,6 @@ def save_last_ai_reply(
     )
 
     data = {
-
         "group_id":
             group_id,
 
@@ -1925,6 +1651,10 @@ def save_last_ai_reply(
             data
         )
 
+
+# =========================================================
+# 랜덤 AI
+# =========================================================
 
 def ask_random_ai(
     group_id,
@@ -1980,13 +1710,9 @@ NO
         if answer.upper() == "NO":
             return
 
-        if answer.upper().startswith(
-            "YES|"
-        ):
+        if answer.upper().startswith("YES|"):
 
-            reply = answer[
-                4:
-            ].strip()
+            reply = answer[4:].strip()
 
             if reply:
 
@@ -1994,6 +1720,7 @@ NO
                     group_id
                 )
 
+                # 기존과 동일하게 Reply API 사용
                 reply_message(
                     reply_token,
                     reply
@@ -2015,11 +1742,7 @@ def maybe_start_random_ai(
     ):
         return
 
-    if (
-        random.random()
-        >
-        AI_TRIGGER_CHANCE
-    ):
+    if random.random() > AI_TRIGGER_CHANCE:
         return
 
     thread = threading.Thread(
@@ -2035,7 +1758,7 @@ def maybe_start_random_ai(
 
 
 # =========================================================
-# 블랙잭 공통
+# 블랙잭
 # =========================================================
 
 BLACKJACK_SUITS = [
@@ -2075,26 +1798,22 @@ def blackjack_new_deck():
     return deck
 
 
-def blackjack_card_value(
-    rank
-):
+def blackjack_card_value(rank):
 
     if rank == "A":
         return 11
 
-    if rank in (
+    if rank in [
         "J",
         "Q",
         "K"
-    ):
+    ]:
         return 10
 
     return int(rank)
 
 
-def blackjack_score(
-    cards
-):
+def blackjack_score(cards):
 
     if not cards:
         return 0
@@ -2110,10 +1829,7 @@ def blackjack_score(
         if rank == "A"
     )
 
-    while (
-        score > 21
-        and aces
-    ):
+    while score > 21 and aces:
 
         score -= 10
         aces -= 1
@@ -2121,14 +1837,7 @@ def blackjack_score(
     return score
 
 
-# =========================================================
-# ★ 블랙잭 점수 표시
-# A 때문에 점수가 낮아지는 경우 표시
-# =========================================================
-
-def blackjack_score_text(
-    cards
-):
+def blackjack_score_text(cards):
 
     if not cards:
         return "카드 없음"
@@ -2154,17 +1863,12 @@ def blackjack_score_text(
         and score != raw_score
     ):
 
-        return (
-            f"{score} "
-            f"(A=1 적용)"
-        )
+        return f"{score} (A=1 적용)"
 
     return str(score)
 
 
-def blackjack_cards_text(
-    cards
-):
+def blackjack_cards_text(cards):
 
     if not cards:
         return "카드 없음"
@@ -2200,16 +1904,15 @@ def blackjack_dealer_text(
         )
 
         return (
-            f"🤖 딜러\n"
+            "🤖 딜러\n"
             f"🃏 {visible}\n"
-            f"합계: ?"
+            "합계: ?"
         )
 
     return (
-        f"🤖 딜러\n"
+        "🤖 딜러\n"
         f"🃏 {blackjack_cards_text(cards)}\n"
-        f"합계: "
-        f"{blackjack_score_text(cards)}"
+        f"합계: {blackjack_score_text(cards)}"
     )
 
 
@@ -2298,9 +2001,7 @@ def blackjack_start(
     deck = blackjack_new_deck()
 
     game = {
-
-        "deck":
-            deck,
+        "deck": deck,
 
         "player_cards": [
             deck.pop(),
@@ -2362,8 +2063,7 @@ def blackjack_start(
         "🎰 블랙잭 시작!\n\n"
 
         f"👤 {user_name}\n"
-        f"🃏 "
-        f"{blackjack_cards_text(game['player_cards'])}\n"
+        f"🃏 {blackjack_cards_text(game['player_cards'])}\n"
         f"합계: "
         f"{blackjack_score_text(game['player_cards'])}\n\n"
 
@@ -2399,14 +2099,10 @@ def blackjack_hit(
 
     if not game["deck"]:
 
-        game["deck"] = (
-            blackjack_new_deck()
-        )
-
-    card = game["deck"].pop()
+        game["deck"] = blackjack_new_deck()
 
     game["player_cards"].append(
-        card
+        game["deck"].pop()
     )
 
     score = blackjack_score(
@@ -2445,8 +2141,7 @@ def blackjack_hit(
 
     return (
         f"👤 {user_name}\n"
-        f"🃏 "
-        f"{blackjack_cards_text(game['player_cards'])}\n"
+        f"🃏 {blackjack_cards_text(game['player_cards'])}\n"
         f"합계: "
         f"{blackjack_score_text(game['player_cards'])}\n\n"
 
@@ -2523,11 +2218,10 @@ def blackjack_cancel(
 
 
 # =========================================================
-# 블랙잭 유저 vs 유저
+# 유저 vs 유저 블랙잭
 # =========================================================
 
 BLACKJACK_DUELS = {}
-
 BLACKJACK_CHALLENGES = {}
 
 
@@ -2543,7 +2237,6 @@ def blackjack_duel_board(
     for uid in duel["players"]:
 
         name = duel["names"][uid]
-
         cards = duel["cards"][uid]
 
         status = (
@@ -2568,14 +2261,11 @@ def blackjack_duel_board(
         ]
 
         lines.append(
-            f"\n➡️ "
-            f"{duel['names'][current]}의 차례!\n"
+            f"\n➡️ {duel['names'][current]}의 차례!\n"
             "`히트` 또는 `스탠드`"
         )
 
-    return "\n\n".join(
-        lines
-    )
+    return "\n\n".join(lines)
 
 
 def blackjack_duel_result(
@@ -2611,14 +2301,10 @@ def blackjack_duel_result(
     sa = scores[a]
     sb = scores[b]
 
-    if (
-        sa > 21
-        and sb > 21
-    ):
+    if sa > 21 and sb > 21:
 
         result = (
-            "🤝 둘 다 버스트! "
-            "무승부!"
+            "🤝 둘 다 버스트! 무승부!"
         )
 
     elif sa > 21:
@@ -2673,31 +2359,22 @@ def blackjack_duel_result(
     )
 
 
-def blackjack_duel_advance(
-    duel
-):
+def blackjack_duel_advance(duel):
 
-    if len(
-        duel["stood"]
-    ) == 2:
+    if len(duel["stood"]) == 2:
 
         return blackjack_duel_result(
             duel
         )
 
-    for offset in (
-        1,
-        2
-    ):
+    for offset in (1, 2):
 
         index = (
             duel["turn"]
             + offset
         ) % 2
 
-        uid = duel[
-            "players"
-        ][index]
+        uid = duel["players"][index]
 
         if uid not in duel["stood"]:
 
@@ -2749,10 +2426,7 @@ def blackjack_duel_challenge(
             "대결을 신청할 수 없어!"
         )
 
-    BLACKJACK_CHALLENGES[
-        group_id
-    ] = {
-
+    BLACKJACK_CHALLENGES[group_id] = {
         "challenger_id":
             challenger_id,
 
@@ -2784,10 +2458,8 @@ def blackjack_duel_accept(
     user_name
 ):
 
-    challenge = (
-        BLACKJACK_CHALLENGES.get(
-            group_id
-        )
+    challenge = BLACKJACK_CHALLENGES.get(
+        group_id
     )
 
     if not challenge:
@@ -2823,10 +2495,7 @@ def blackjack_duel_accept(
             "상대방이 수락해야 해!"
         )
 
-    if (
-        user_name
-        != challenge["target_name"]
-    ):
+    if user_name != challenge["target_name"]:
 
         return (
             f"{challenge['target_name']}님만 "
@@ -2840,31 +2509,21 @@ def blackjack_duel_accept(
 
     deck = blackjack_new_deck()
 
-    a = challenge[
-        "challenger_id"
-    ]
-
+    a = challenge["challenger_id"]
     b = user_id
 
     duel = {
-
-        "players": [
-            a,
-            b
-        ],
+        "players": [a, b],
 
         "names": {
             a:
-                challenge[
-                    "challenger_name"
-                ],
+                challenge["challenger_name"],
 
             b:
                 user_name
         },
 
         "cards": {
-
             a: [
                 deck.pop(),
                 deck.pop()
@@ -2876,19 +2535,14 @@ def blackjack_duel_accept(
             ]
         },
 
-        "deck":
-            deck,
+        "deck": deck,
 
-        "stood":
-            set(),
+        "stood": set(),
 
-        "turn":
-            0
+        "turn": 0
     }
 
-    BLACKJACK_DUELS[
-        group_id
-    ] = duel
+    BLACKJACK_DUELS[group_id] = duel
 
     for uid in duel["players"]:
 
@@ -2899,13 +2553,9 @@ def blackjack_duel_accept(
             == 21
         ):
 
-            duel["stood"].add(
-                uid
-            )
+            duel["stood"].add(uid)
 
-    if len(
-        duel["stood"]
-    ) == 2:
+    if len(duel["stood"]) == 2:
 
         result = blackjack_duel_result(
             duel,
@@ -2940,10 +2590,8 @@ def blackjack_duel_decline(
     user_name
 ):
 
-    challenge = (
-        BLACKJACK_CHALLENGES.get(
-            group_id
-        )
+    challenge = BLACKJACK_CHALLENGES.get(
+        group_id
     )
 
     if not challenge:
@@ -3006,9 +2654,7 @@ def blackjack_duel_action(
             "상대방 차례를 기다려 줘."
         )
 
-    current = duel[
-        "players"
-    ][
+    current = duel["players"][
         duel["turn"]
     ]
 
@@ -3023,14 +2669,9 @@ def blackjack_duel_action(
     if action == "hit":
 
         if not duel["deck"]:
+            duel["deck"] = blackjack_new_deck()
 
-            duel["deck"] = (
-                blackjack_new_deck()
-            )
-
-        duel["cards"][
-            user_id
-        ].append(
+        duel["cards"][user_id].append(
             duel["deck"].pop()
         )
 
@@ -3051,9 +2692,7 @@ def blackjack_duel_action(
                 f"({blackjack_score_text(duel['cards'][user_id])})\n\n"
             )
 
-            if len(
-                duel["stood"]
-            ) == 2:
+            if len(duel["stood"]) == 2:
 
                 result = blackjack_duel_result(
                     duel
@@ -3064,10 +2703,7 @@ def blackjack_duel_action(
                     None
                 )
 
-                return (
-                    message
-                    + result
-                )
+                return message + result
 
             return (
                 message
@@ -3089,9 +2725,7 @@ def blackjack_duel_action(
                 "자동으로 스탠드했어.\n\n"
             )
 
-            if len(
-                duel["stood"]
-            ) == 2:
+            if len(duel["stood"]) == 2:
 
                 result = blackjack_duel_result(
                     duel
@@ -3102,10 +2736,7 @@ def blackjack_duel_action(
                     None
                 )
 
-                return (
-                    message
-                    + result
-                )
+                return message + result
 
             return (
                 message
@@ -3124,9 +2755,7 @@ def blackjack_duel_action(
             )
         )
 
-    duel["stood"].add(
-        user_id
-    )
+    duel["stood"].add(user_id)
 
     message = (
         f"✋ "
@@ -3134,9 +2763,7 @@ def blackjack_duel_action(
         "스탠드!\n\n"
     )
 
-    if len(
-        duel["stood"]
-    ) == 2:
+    if len(duel["stood"]) == 2:
 
         result = blackjack_duel_result(
             duel
@@ -3147,10 +2774,7 @@ def blackjack_duel_action(
             None
         )
 
-        return (
-            message
-            + result
-        )
+        return message + result
 
     return (
         message
@@ -3164,22 +2788,13 @@ def blackjack_duel_action(
 # Webhook
 # =========================================================
 
-@app.route(
-    "/",
-    methods=["GET"]
-)
+@app.route("/", methods=["GET"])
 def home():
 
-    return (
-        "LINE BOT OK",
-        200
-    )
+    return "LINE BOT OK", 200
 
 
-@app.route(
-    "/webhook",
-    methods=["POST"]
-)
+@app.route("/webhook", methods=["POST"])
 def webhook():
 
     body = request.get_data()
@@ -3193,7 +2808,6 @@ def webhook():
         body,
         signature
     ):
-
         abort(400)
 
     try:
@@ -3211,10 +2825,7 @@ def webhook():
 
     for event in events:
 
-        if event.get(
-            "type"
-        ) != "message":
-
+        if event.get("type") != "message":
             continue
 
         message = event.get(
@@ -3222,10 +2833,7 @@ def webhook():
             {}
         )
 
-        if message.get(
-            "type"
-        ) != "text":
-
+        if message.get("type") != "text":
             continue
 
         text = message.get(
@@ -3260,26 +2868,18 @@ def webhook():
             event
         )
 
-        print(
-            "MESSAGE:",
-            event_time.strftime(
-                "%Y-%m-%d %H:%M:%S"
-            ),
-            text[:100]
-        )
-
-        # =================================================
+        # -------------------------------------------------
         # 프로필
-        # =================================================
+        # -------------------------------------------------
 
         user_name = get_profile_name(
             user_id,
             group_id
         )
 
-        # =================================================
-        # 닉네임 변환
-        # =================================================
+        # -------------------------------------------------
+        # 닉네임
+        # -------------------------------------------------
 
         formatted = make_name_format(
             text
@@ -3294,22 +2894,15 @@ def webhook():
 
             continue
 
-        # =================================================
-        # ! AI 질문
-        # =================================================
+        # -------------------------------------------------
+        # ! AI
+        # -------------------------------------------------
 
         if text.startswith("!"):
 
-            prompt = text[
-                1:
-            ].strip()
+            prompt = text[1:].strip()
 
             if prompt:
-
-                print(
-                    "START REPLY AI:",
-                    prompt
-                )
 
                 answer = answer_ai_question(
                     prompt
@@ -3322,9 +2915,9 @@ def webhook():
 
             continue
 
-        # =================================================
-        # 명령어 정리
-        # =================================================
+        # -------------------------------------------------
+        # 명령어
+        # -------------------------------------------------
 
         normalized = re.sub(
             r"\s+",
@@ -3332,9 +2925,9 @@ def webhook():
             text
         )
 
-        # =================================================
-        # 유저 vs 유저 블랙잭
-        # =================================================
+        # -------------------------------------------------
+        # 유저 vs 유저 블랙잭 신청
+        # -------------------------------------------------
 
         duel_match = re.match(
             r"^블랙잭\s+(.+)$",
@@ -3343,8 +2936,7 @@ def webhook():
 
         if (
             duel_match
-            and normalized
-            not in [
+            and normalized not in [
                 "블랙잭종료",
                 "종료블랙잭"
             ]
@@ -3368,6 +2960,10 @@ def webhook():
 
             continue
 
+        # -------------------------------------------------
+        # 수락
+        # -------------------------------------------------
+
         if normalized == "수락":
 
             reply_message(
@@ -3381,6 +2977,10 @@ def webhook():
 
             continue
 
+        # -------------------------------------------------
+        # 거절
+        # -------------------------------------------------
+
         if normalized == "거절":
 
             reply_message(
@@ -3393,6 +2993,10 @@ def webhook():
             )
 
             continue
+
+        # -------------------------------------------------
+        # 대결 취소
+        # -------------------------------------------------
 
         if normalized in [
             "대결취소",
@@ -3431,9 +3035,9 @@ def webhook():
 
             continue
 
-        # =================================================
-        # 진행 중인 유저 vs 유저 블랙잭
-        # =================================================
+        # -------------------------------------------------
+        # 유저 vs 유저 히트
+        # -------------------------------------------------
 
         if normalized in [
             "히트",
@@ -3458,6 +3062,10 @@ def webhook():
 
                 continue
 
+        # -------------------------------------------------
+        # 유저 vs 유저 스탠드
+        # -------------------------------------------------
+
         if normalized in [
             "스탠드",
             "스탑",
@@ -3481,9 +3089,9 @@ def webhook():
 
                 continue
 
-        # =================================================
+        # -------------------------------------------------
         # 1인 블랙잭 종료
-        # =================================================
+        # -------------------------------------------------
 
         if normalized in [
             "블랙잭종료",
@@ -3500,9 +3108,9 @@ def webhook():
 
             continue
 
-        # =================================================
+        # -------------------------------------------------
         # 1인 블랙잭 시작
-        # =================================================
+        # -------------------------------------------------
 
         if normalized in [
             "블랙잭",
@@ -3520,9 +3128,9 @@ def webhook():
 
             continue
 
-        # =================================================
+        # -------------------------------------------------
         # 1인 블랙잭 히트
-        # =================================================
+        # -------------------------------------------------
 
         if normalized in [
             "히트",
@@ -3541,9 +3149,9 @@ def webhook():
 
             continue
 
-        # =================================================
+        # -------------------------------------------------
         # 1인 블랙잭 스탠드
-        # =================================================
+        # -------------------------------------------------
 
         if normalized in [
             "스탠드",
@@ -3562,9 +3170,9 @@ def webhook():
 
             continue
 
-        # =================================================
+        # -------------------------------------------------
         # 소통량 초기화
-        # =================================================
+        # -------------------------------------------------
 
         if normalized in [
             "단라소통량초기화",
@@ -3591,29 +3199,27 @@ def webhook():
 
             continue
 
-        # =================================================
+        # -------------------------------------------------
         # 단라 소통량
-        # =================================================
+        # -------------------------------------------------
 
         if normalized in [
             "단라소통량",
             "소통량"
         ]:
 
-            result = make_ranking_text(
-                group_id
-            )
-
             reply_message(
                 reply_token,
-                result
+                make_ranking_text(
+                    group_id
+                )
             )
 
             continue
 
-        # =================================================
+        # -------------------------------------------------
         # 내 마딧수
-        # =================================================
+        # -------------------------------------------------
 
         if normalized in [
             "내마딧수",
@@ -3621,100 +3227,79 @@ def webhook():
             "내말딧수"
         ]:
 
-            result = make_my_count_text(
-                group_id,
-                user_id,
-                user_name
-            )
-
             reply_message(
                 reply_token,
-                result
+                make_my_count_text(
+                    group_id,
+                    user_id,
+                    user_name
+                )
             )
 
             continue
 
-        # =================================================
+        # -------------------------------------------------
         # 방 통계
-        # =================================================
+        # -------------------------------------------------
 
         if normalized in [
             "방통계",
             "방통계보기"
         ]:
 
-            result = make_room_stats(
-                group_id
-            )
-
             reply_message(
                 reply_token,
-                result
+                make_room_stats(
+                    group_id
+                )
             )
 
             continue
 
-        # =================================================
+        # -------------------------------------------------
         # 내 통계
-        # =================================================
+        # -------------------------------------------------
 
         if normalized in [
             "내통계",
             "내통계보기"
         ]:
 
-            result = make_my_stats(
-                group_id,
-                user_id,
-                user_name
-            )
-
             reply_message(
                 reply_token,
-                result
+                make_my_stats(
+                    group_id,
+                    user_id,
+                    user_name
+                )
             )
 
             continue
 
-        # =================================================
-        # 일반 메시지 저장
-        # =================================================
+        # -------------------------------------------------
+        # 일반 메시지
+        # -------------------------------------------------
 
-        if not is_laughter_only(
-            text
-        ):
+        if is_laughter_only(text):
+            continue
 
-            saved = save_chat_message(
+        saved = save_chat_message(
+            group_id,
+            user_id,
+            user_name,
+            text,
+            event_time
+        )
+
+        if saved:
+
+            # 랜덤 AI
+            maybe_start_random_ai(
                 group_id,
-                user_id,
-                user_name,
-                text,
-                event_time
+                reply_token
             )
 
-            if saved:
-
-                print(
-                    "소통량 집계 완료:",
-                    user_name,
-                    event_time.strftime(
-                        "%Y-%m-%d"
-                    )
-                )
-
-                # =================================================
-                # 랜덤 AI
-                # =================================================
-
-                maybe_start_random_ai(
-                    group_id,
-                    reply_token
-                )
-
-    return (
-        "OK",
-        200
-    )
+    return "OK", 200
 
 
 # =========================================================
